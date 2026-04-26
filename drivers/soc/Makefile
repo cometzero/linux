@@ -4,6 +4,7 @@
 #
 
 obj-y				+= apple/
+obj-y				+= apollo/
 obj-y				+= aspeed/
 obj-$(CONFIG_ARCH_AT91)		+= atmel/
 obj-y				+= bcm/
