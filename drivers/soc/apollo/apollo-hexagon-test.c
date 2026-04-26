@@ -3,6 +3,7 @@
  * Apollo Hexagon IOMMU probe driver.
  */
 
+#include <linux/bits.h>
 #include <linux/device.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
@@ -21,6 +22,14 @@
 #define APOLLO_HEXAGON_TEST_PATTERN	0xa510beef
 #define APOLLO_HEXAGON_DMA_TIMEOUT_MS	2000
 #define APOLLO_HEXAGON_DMA_POLL_MS	10
+#define APOLLO_HEXAGON_REG_CAPS		0x1c
+#define APOLLO_HEXAGON_REG_PATH		0x20
+#define APOLLO_HEXAGON_REG_STREAM_ID	0x24
+#define APOLLO_HEXAGON_CAP_COPY_ENGINE	BIT(0)
+#define APOLLO_HEXAGON_CAP_DIRECT_TLM	BIT(1)
+#define APOLLO_HEXAGON_CAP_SMMU_TRANSLATED	BIT(2)
+#define APOLLO_HEXAGON_PATH_DIRECT_TLM		1
+#define APOLLO_HEXAGON_PATH_SMMU_TRANSLATED	2
 
 static const u32 apollo_hexagon_dma_expected[] = {
 	0x48455831, 0x444d4131, 0x11223344, 0x55667788,
@@ -33,6 +42,54 @@ struct apollo_hexagon_test {
 	dma_addr_t dma_addr;
 	size_t size;
 };
+
+static int apollo_hexagon_check_dma_abi(struct device *dev,
+					struct apollo_hexagon_test *test)
+{
+	u32 expected_stream_id = 1;
+	u32 caps;
+	u32 path;
+	u32 stream_id;
+	int ret;
+
+	ret = of_property_read_u32(dev->of_node, "apollo,smmu-stream-id",
+				   &expected_stream_id);
+	if (ret && ret != -EINVAL)
+		return dev_err_probe(dev, ret,
+				     "failed to read apollo,smmu-stream-id\n");
+
+	caps = readl(test->regs + APOLLO_HEXAGON_REG_CAPS);
+	path = readl(test->regs + APOLLO_HEXAGON_REG_PATH);
+	stream_id = readl(test->regs + APOLLO_HEXAGON_REG_STREAM_ID);
+
+	if (!(caps & APOLLO_HEXAGON_CAP_COPY_ENGINE))
+		return dev_err_probe(dev, -ENODEV,
+				     "missing Hexagon DMA copy capability\n");
+
+	if (stream_id != expected_stream_id)
+		return dev_err_probe(dev, -EINVAL,
+				     "stream-id mismatch hw=0x%x dt=0x%x\n",
+				     stream_id, expected_stream_id);
+
+	if (path == APOLLO_HEXAGON_PATH_SMMU_TRANSLATED &&
+	    (caps & APOLLO_HEXAGON_CAP_SMMU_TRANSLATED)) {
+		dev_info(dev, "dma path smmu-translated caps=0x%x stream-id=0x%x\n",
+			 caps, stream_id);
+		return 0;
+	}
+
+	if (path == APOLLO_HEXAGON_PATH_DIRECT_TLM &&
+	    (caps & APOLLO_HEXAGON_CAP_DIRECT_TLM)) {
+		dev_info(dev,
+			 "dma path direct-tlm caps=0x%x stream-id=0x%x smmuv3-translated=no\n",
+			 caps, stream_id);
+		return 0;
+	}
+
+	return dev_err_probe(dev, -EINVAL,
+			     "unsupported DMA path path=0x%x caps=0x%x\n",
+			     path, caps);
+}
 
 static int apollo_hexagon_check_firmware_dma(struct device *dev)
 {
@@ -116,6 +173,10 @@ static int apollo_hexagon_probe(struct platform_device *pdev)
 	if (IS_ERR(test->regs))
 		return dev_err_probe(dev, PTR_ERR(test->regs),
 				     "failed to map control window\n");
+
+	ret = apollo_hexagon_check_dma_abi(dev, test);
+	if (ret)
+		return ret;
 
 	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(48));
 	if (ret)
