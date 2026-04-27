@@ -17,6 +17,7 @@
 #include <linux/platform_device.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 
 #define APOLLO_HEXAGON_TEST_SIZE	SZ_4K
 #define APOLLO_HEXAGON_TEST_PATTERN	0xa510beef
@@ -50,6 +51,7 @@ static int apollo_hexagon_check_dma_abi(struct device *dev,
 	u32 caps;
 	u32 path;
 	u32 stream_id;
+	const char *expected_path = NULL;
 	int ret;
 
 	ret = of_property_read_u32(dev->of_node, "apollo,smmu-stream-id",
@@ -71,15 +73,31 @@ static int apollo_hexagon_check_dma_abi(struct device *dev,
 				     "stream-id mismatch hw=0x%x dt=0x%x\n",
 				     stream_id, expected_stream_id);
 
+	ret = of_property_read_string(dev->of_node, "apollo,dma-path",
+				      &expected_path);
+	if (ret && ret != -EINVAL)
+		return dev_err_probe(dev, ret,
+				     "failed to read apollo,dma-path\n");
+
 	if (path == APOLLO_HEXAGON_PATH_SMMU_TRANSLATED &&
 	    (caps & APOLLO_HEXAGON_CAP_SMMU_TRANSLATED)) {
-		dev_info(dev, "dma path smmu-translated caps=0x%x stream-id=0x%x\n",
+		if (expected_path && strcmp(expected_path, "smmu-translated"))
+			return dev_err_probe(dev, -EINVAL,
+					     "DMA path mismatch hw=smmu-translated dt=%s\n",
+					     expected_path);
+
+		dev_info(dev, "dma path smmu-translated caps=0x%x stream-id=0x%x smmuv3-translated=yes\n",
 			 caps, stream_id);
 		return 0;
 	}
 
 	if (path == APOLLO_HEXAGON_PATH_DIRECT_TLM &&
 	    (caps & APOLLO_HEXAGON_CAP_DIRECT_TLM)) {
+		if (expected_path && strcmp(expected_path, "direct-tlm"))
+			return dev_err_probe(dev, -EINVAL,
+					     "DMA path mismatch hw=direct-tlm dt=%s\n",
+					     expected_path);
+
 		dev_info(dev,
 			 "dma path direct-tlm caps=0x%x stream-id=0x%x smmuv3-translated=no\n",
 			 caps, stream_id);
