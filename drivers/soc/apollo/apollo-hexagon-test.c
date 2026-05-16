@@ -261,12 +261,17 @@ struct apollo_hexagon_test {
 	void __iomem *regs;
 	void __iomem *tbu_regs;
 	void __iomem *shared_base;
+	struct device *dev;
 	phys_addr_t shared_phys;
 	resource_size_t shared_size;
 	u64 dma_iova_base;
+	u64 requested_dma_iova_base;
 	u64 dma_window_size;
+	dma_addr_t linux_iommu_iova;
+	size_t linux_iommu_size;
 	u32 stream_id;
 	bool primary_endpoint;
+	bool linux_iommu_mapped;
 	int doorbell_irq;
 	atomic_t async_irq_pending;
 	struct completion async_fence;
@@ -1103,6 +1108,125 @@ static int apollo_hexagon_check_tbu_features(struct device *dev,
 	return 0;
 }
 
+static void apollo_hexagon_release_linux_iommu(void *data)
+{
+	struct apollo_hexagon_test *test = data;
+
+	if (!test->linux_iommu_mapped)
+		return;
+
+	dma_unmap_resource(test->dev, test->linux_iommu_iova,
+			   test->linux_iommu_size, DMA_BIDIRECTIONAL,
+			   DMA_ATTR_SKIP_CPU_SYNC);
+	test->linux_iommu_mapped = false;
+}
+
+static int apollo_hexagon_configure_linux_iommu(struct device *dev,
+						struct apollo_hexagon_test *test)
+{
+	struct iommu_domain *domain;
+	struct iommu_group *group;
+	phys_addr_t translated;
+	dma_addr_t mapped_iova;
+	size_t map_size;
+	u64 requested_end;
+	int ret;
+
+	group = iommu_group_get(dev);
+	if (!group)
+		return dev_err_probe(dev, -ENODEV,
+				     "arm-smmu-v3 IOMMU group unavailable\n");
+
+	domain = iommu_get_domain_for_dev(dev);
+	if (!domain) {
+		iommu_group_put(group);
+		return dev_err_probe(dev, -ENODEV,
+				     "arm-smmu-v3 IOMMU domain unavailable\n");
+	}
+
+	if (!iommu_is_dma_domain(domain)) {
+		iommu_group_put(group);
+		return dev_err_probe(dev, -EINVAL,
+				     "arm-smmu-v3 domain is not a DMA domain type=0x%x\n",
+				     domain->type);
+	}
+
+	iommu_group_put(group);
+
+	if (!test->dma_window_size || test->dma_window_size > SIZE_MAX)
+		return dev_err_probe(dev, -EINVAL,
+				     "invalid DMA/IOMMU window size=0x%llx\n",
+				     test->dma_window_size);
+	if ((u64)test->requested_dma_iova_base > U32_MAX ||
+	    test->dma_window_size - 1 >
+	    U32_MAX - test->requested_dma_iova_base)
+		return dev_err_probe(dev, -EOVERFLOW,
+				     "requested DMA/IOMMU window exceeds 32-bit Hexagon job ABI iova=0x%llx size=0x%llx\n",
+				     test->requested_dma_iova_base,
+				     test->dma_window_size);
+
+	map_size = (size_t)test->dma_window_size;
+	requested_end = test->requested_dma_iova_base +
+			test->dma_window_size - 1;
+	dev->bus_dma_limit = requested_end;
+	mapped_iova = dma_map_resource(dev, test->shared_phys, map_size,
+				       DMA_BIDIRECTIONAL,
+				       DMA_ATTR_SKIP_CPU_SYNC);
+	if (dma_mapping_error(dev, mapped_iova))
+		return dev_err_probe(dev, -EIO,
+				     "arm-smmu-v3 dma_map_resource failed phys=%pa size=0x%zx\n",
+				     &test->shared_phys, map_size);
+
+	if ((u64)mapped_iova > U32_MAX ||
+	    test->dma_window_size - 1 > U32_MAX - (u64)mapped_iova) {
+		ret = dev_err_probe(dev, -EOVERFLOW,
+				    "arm-smmu-v3 DMA IOVA exceeds 32-bit Hexagon job ABI iova=%pad size=0x%zx\n",
+				    &mapped_iova, map_size);
+		goto err_unmap;
+	}
+	if (mapped_iova != test->requested_dma_iova_base) {
+		ret = dev_err_probe(dev, -ERANGE,
+				    "arm-smmu-v3 DMA IOVA did not match Hexagon firmware ABI iova=%pad requested=0x%llx limit=0x%llx\n",
+				    &mapped_iova,
+				    test->requested_dma_iova_base,
+				    requested_end);
+		goto err_unmap;
+	}
+
+	translated = iommu_iova_to_phys(domain, mapped_iova);
+	if (translated != test->shared_phys) {
+		ret = dev_err_probe(dev, -EIO,
+				    "arm-smmu-v3 IOVA translation mismatch iova=%pad phys=%pa expected=%pa\n",
+				    &mapped_iova, &translated,
+				    &test->shared_phys);
+		goto err_unmap;
+	}
+
+	test->linux_iommu_iova = mapped_iova;
+	test->linux_iommu_size = map_size;
+	test->linux_iommu_mapped = true;
+	test->dma_iova_base = mapped_iova;
+
+	ret = devm_add_action_or_reset(dev, apollo_hexagon_release_linux_iommu,
+				       test);
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "failed to register Linux IOMMU cleanup\n");
+
+	dev_info(dev,
+		 "arm-smmu-v3 dma-iommu map installed iova=%pad requested=0x%llx phys=%pa size=0x%zx domain-type=0x%x\n",
+		 &test->linux_iommu_iova, test->requested_dma_iova_base,
+		 &test->shared_phys, test->linux_iommu_size, domain->type);
+	dev_info(dev, "iommu group attached domain-type=0x%x\n", domain->type);
+
+	return 0;
+
+err_unmap:
+	dma_unmap_resource(dev, mapped_iova, map_size, DMA_BIDIRECTIONAL,
+			   DMA_ATTR_SKIP_CPU_SYNC);
+	return ret;
+}
+
 static int apollo_hexagon_dynamic_map(struct device *dev,
 				      struct apollo_hexagon_test *test)
 {
@@ -1120,7 +1244,8 @@ static int apollo_hexagon_dynamic_map(struct device *dev,
 	if (ret)
 		return ret;
 
-	dev_info(dev, "dynamic SMMU map refreshed iova=0x%llx pa=%pa size=0x%llx count=%u\n",
+	dev_info(dev,
+		 "dynamic SMMU map refreshed linux-iommu=yes iova=0x%llx pa=%pa size=0x%llx count=%u\n",
 		 test->dma_iova_base, &test->shared_phys,
 		 test->dma_window_size,
 		 readl(test->tbu_regs + APOLLO_TBU_REG_MAP_COUNT));
@@ -1683,13 +1808,13 @@ static int apollo_hexagon_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct apollo_hexagon_test *test;
-	struct iommu_group *group;
 	u32 *word;
 	int ret;
 
 	test = devm_kzalloc(dev, sizeof(*test), GFP_KERNEL);
 	if (!test)
 		return -ENOMEM;
+	test->dev = dev;
 
 	test->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(test->regs))
@@ -1723,6 +1848,7 @@ static int apollo_hexagon_probe(struct platform_device *pdev)
 	if (ret)
 		return dev_err_probe(dev, ret,
 				     "failed to read apollo,dma-iova-base\n");
+	test->requested_dma_iova_base = test->dma_iova_base;
 	ret = of_property_read_u64(dev->of_node, "apollo,dma-window-size",
 				   &test->dma_window_size);
 	if (ret)
@@ -1736,23 +1862,19 @@ static int apollo_hexagon_probe(struct platform_device *pdev)
 	ret = apollo_hexagon_check_dma_abi(dev, test);
 	if (ret)
 		return ret;
-	ret = apollo_hexagon_check_tbu_features(dev, test);
+
+	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "failed to set 32-bit DMA mask\n");
+
+	ret = apollo_hexagon_configure_linux_iommu(dev, test);
 	if (ret)
 		return ret;
 
-	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(48));
+	ret = apollo_hexagon_check_tbu_features(dev, test);
 	if (ret)
-		ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));
-	if (ret)
-		return dev_err_probe(dev, ret, "failed to set DMA mask\n");
-
-	group = iommu_group_get(dev);
-	if (group) {
-		dev_info(dev, "iommu group attached\n");
-		iommu_group_put(group);
-	} else {
-		dev_warn(dev, "iommu group unavailable\n");
-	}
+		return ret;
 
 	test->size = APOLLO_HEXAGON_TEST_SIZE;
 	test->cpu_addr = dmam_alloc_coherent(dev, test->size, &test->dma_addr,
