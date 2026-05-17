@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config DRM_ACCEL_APOLLO_HEXAGON
+	bool "Apollo Hexagon DRM accel driver"
+	depends on DRM_ACCEL
+	depends on OF
+	depends on HAS_DMA
+	depends on ARM64 || COMPILE_TEST
+	select IOMMU_API
+	help
+	  Build the Apollo Hexagon platform driver as a DRM compute
+	  accelerator exposed through /dev/accel/accel*.  The driver binds
+	  the apollo,hexagon-ip device behind the ARM SMMUv3 path and exposes
+	  the repo-local CNN, vector-add, and DMA stress submit ABI as DRM
+	  driver ioctls.

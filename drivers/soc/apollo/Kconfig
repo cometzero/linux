@@ -6,18 +6,3 @@ config SOC_APOLLO
 	help
 	  Enable support for the Apollo SoC models used by the apollo-qbox
 	  virtual platform.
-
-if SOC_APOLLO
-
-config APOLLO_HEXAGON_TEST
-	bool "Apollo Hexagon IOMMU probe driver"
-	depends on OF
-	depends on HAS_DMA
-	select IOMMU_API
-	help
-	  Build a small platform driver for the apollo,hexagon-ip device.
-	  The driver proves that the Linux device tree can bind a Hexagon
-	  master behind an ARM SMMUv3 node and that coherent DMA allocation
-	  succeeds through the configured DMA/IOMMU path.
-
-endif

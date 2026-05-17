@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Apollo Hexagon IOMMU probe driver.
+ * Apollo Hexagon DRM accel driver.
  */
 
 #include <linux/atomic.h>
@@ -10,14 +10,12 @@
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
 #include <linux/err.h>
-#include <linux/fs.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/iommu.h>
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
-#include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
@@ -26,8 +24,12 @@
 #include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/string.h>
-#include <linux/uaccess.h>
-#include <linux/apollo_hexagon.h>
+
+#include <drm/apollo_hexagon_accel.h>
+#include <drm/drm_accel.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_gem.h>
+#include <drm/drm_ioctl.h>
 
 #define APOLLO_HEXAGON_TEST_SIZE	SZ_4K
 #define APOLLO_HEXAGON_TEST_PATTERN	0xa510beef
@@ -257,7 +259,8 @@ static const u32 apollo_hexagon_dma_expected[] = {
 	0xa5a55a5a, 0x5a5aa5a5, 0xfeedc0de, 0x600dbeef,
 };
 
-struct apollo_hexagon_test {
+struct apollo_hexagon {
+	struct drm_device drm;
 	void __iomem *regs;
 	void __iomem *tbu_regs;
 	void __iomem *shared_base;
@@ -275,19 +278,23 @@ struct apollo_hexagon_test {
 	int doorbell_irq;
 	atomic_t async_irq_pending;
 	struct completion async_fence;
-	struct miscdevice miscdev;
 	struct mutex lock;
 	void *cpu_addr;
 	dma_addr_t dma_addr;
 	size_t size;
 };
 
+static struct apollo_hexagon *to_apollo_hexagon(struct drm_device *drm)
+{
+	return container_of(drm, struct apollo_hexagon, drm);
+}
+
 static int apollo_hexagon_wait_job(struct device *dev,
-				   struct apollo_hexagon_test *test,
+				   struct apollo_hexagon *test,
 				   u32 queue_id, u32 expected_result,
 				   u32 *fence_seq);
 
-static void apollo_hexagon_prepare_async_fence(struct apollo_hexagon_test *test,
+static void apollo_hexagon_prepare_async_fence(struct apollo_hexagon *test,
 					       u32 queue_id)
 {
 	atomic_set(&test->async_irq_pending, 0);
@@ -297,7 +304,7 @@ static void apollo_hexagon_prepare_async_fence(struct apollo_hexagon_test *test,
 
 static irqreturn_t apollo_hexagon_irq(int irq, void *data)
 {
-	struct apollo_hexagon_test *test = data;
+	struct apollo_hexagon *test = data;
 	u32 pending = readl(test->regs + APOLLO_HEXAGON_REG_IRQ_STATUS);
 
 	if (!pending)
@@ -311,7 +318,7 @@ static irqreturn_t apollo_hexagon_irq(int irq, void *data)
 }
 
 static int apollo_hexagon_check_dma_abi(struct device *dev,
-					struct apollo_hexagon_test *test)
+					struct apollo_hexagon *test)
 {
 	u32 expected_stream_id = 1;
 	u32 caps;
@@ -458,7 +465,7 @@ static void apollo_tbu_write64(void __iomem *base, u32 lo, u32 hi, u64 value)
 }
 
 static int apollo_hexagon_tbu_ctrl(struct device *dev,
-				   struct apollo_hexagon_test *test, u32 ctrl)
+				   struct apollo_hexagon *test, u32 ctrl)
 {
 	u32 status;
 
@@ -475,7 +482,7 @@ static int apollo_hexagon_tbu_ctrl(struct device *dev,
 }
 
 static int apollo_hexagon_tbu_map(struct device *dev,
-				  struct apollo_hexagon_test *test,
+				  struct apollo_hexagon *test,
 				  u64 iova, phys_addr_t pa, u64 size)
 {
 	apollo_tbu_write64(test->tbu_regs, APOLLO_TBU_REG_MAP_IOVA_LO,
@@ -493,7 +500,7 @@ static u64 apollo_tbu_read64(void __iomem *base, u32 lo, u32 hi)
 	return readl(base + lo) | ((u64)readl(base + hi) << 32);
 }
 
-static void apollo_smmuv3_write64(struct apollo_hexagon_test *test,
+static void apollo_smmuv3_write64(struct apollo_hexagon *test,
 				  u32 lo, u32 hi, u64 value)
 {
 	void __iomem *smmuv3 = test->tbu_regs + APOLLO_TBU_REG_SMMUV3_BASE;
@@ -508,7 +515,7 @@ static u32 apollo_smmuv3_gerror_active(void __iomem *smmuv3)
 	       APOLLO_SMMUV3_ARCH_GERROR_KNOWN_MASK;
 }
 
-static u64 apollo_hexagon_shared_read64(struct apollo_hexagon_test *test,
+static u64 apollo_hexagon_shared_read64(struct apollo_hexagon *test,
 					u64 offset)
 {
 	return readl(test->shared_base + offset) |
@@ -522,14 +529,14 @@ static u64 apollo_tbu_arch_index(u64 iova, u32 level)
 	       APOLLO_TBU_ARCH_INDEX_MASK;
 }
 
-static void apollo_hexagon_ptw_write_desc(struct apollo_hexagon_test *test,
+static void apollo_hexagon_ptw_write_desc(struct apollo_hexagon *test,
 					  u64 offset, u64 desc)
 {
 	writel(lower_32_bits(desc), test->shared_base + offset);
 	writel(upper_32_bits(desc), test->shared_base + offset + sizeof(u32));
 }
 
-static void apollo_hexagon_smmuv3_write_cmd(struct apollo_hexagon_test *test,
+static void apollo_hexagon_smmuv3_write_cmd(struct apollo_hexagon *test,
 					    u32 index, u64 word0, u64 word1)
 {
 	const u64 offset = APOLLO_HEXAGON_SMMUV3_CMDQ_OFFSET +
@@ -553,7 +560,7 @@ static u32 apollo_smmuv3_cmdq_advance(u32 value)
 }
 
 static int apollo_hexagon_issue_ril_tlbi(struct device *dev,
-					 struct apollo_hexagon_test *test,
+					 struct apollo_hexagon *test,
 					 u64 iova, u32 bytes)
 {
 	void __iomem *smmuv3 = test->tbu_regs + APOLLO_TBU_REG_SMMUV3_BASE;
@@ -613,7 +620,7 @@ static int apollo_hexagon_issue_ril_tlbi(struct device *dev,
 }
 
 static int apollo_hexagon_check_arch_ptw(struct device *dev,
-					 struct apollo_hexagon_test *test)
+					 struct apollo_hexagon *test)
 {
 	void __iomem *smmuv3 = test->tbu_regs + APOLLO_TBU_REG_SMMUV3_BASE;
 	const u64 iova = test->dma_iova_base;
@@ -858,7 +865,7 @@ static int apollo_hexagon_check_arch_ptw(struct device *dev,
 }
 
 static int apollo_hexagon_check_arch_queues(struct device *dev,
-					    struct apollo_hexagon_test *test)
+					    struct apollo_hexagon *test)
 {
 	void __iomem *smmuv3 = test->tbu_regs + APOLLO_TBU_REG_SMMUV3_BASE;
 	const u64 cmdq = test->shared_phys + APOLLO_HEXAGON_SMMUV3_CMDQ_OFFSET;
@@ -1048,7 +1055,7 @@ static int apollo_hexagon_check_arch_queues(struct device *dev,
 }
 
 static int apollo_hexagon_check_tbu_features(struct device *dev,
-					     struct apollo_hexagon_test *test)
+					     struct apollo_hexagon *test)
 {
 	const u32 required = APOLLO_TBU_FEATURE_PAGE_TABLE_WALKER |
 			    APOLLO_TBU_FEATURE_ATS_CACHE |
@@ -1110,7 +1117,7 @@ static int apollo_hexagon_check_tbu_features(struct device *dev,
 
 static void apollo_hexagon_release_linux_iommu(void *data)
 {
-	struct apollo_hexagon_test *test = data;
+	struct apollo_hexagon *test = data;
 
 	if (!test->linux_iommu_mapped)
 		return;
@@ -1122,7 +1129,7 @@ static void apollo_hexagon_release_linux_iommu(void *data)
 }
 
 static int apollo_hexagon_configure_linux_iommu(struct device *dev,
-						struct apollo_hexagon_test *test)
+						struct apollo_hexagon *test)
 {
 	struct iommu_domain *domain;
 	struct iommu_group *group;
@@ -1228,7 +1235,7 @@ err_unmap:
 }
 
 static int apollo_hexagon_dynamic_map(struct device *dev,
-				      struct apollo_hexagon_test *test)
+				      struct apollo_hexagon *test)
 {
 	int ret;
 
@@ -1254,7 +1261,7 @@ static int apollo_hexagon_dynamic_map(struct device *dev,
 }
 
 static int apollo_hexagon_dynamic_sg_map(struct device *dev,
-					 struct apollo_hexagon_test *test)
+					 struct apollo_hexagon *test)
 {
 	const u64 input_iova = test->dma_iova_base +
 			       APOLLO_HEXAGON_STRESS_INPUT_BASE;
@@ -1301,7 +1308,7 @@ static int apollo_hexagon_dynamic_sg_map(struct device *dev,
 }
 
 static int apollo_hexagon_map_shared(struct device *dev,
-				     struct apollo_hexagon_test *test)
+				     struct apollo_hexagon *test)
 {
 	struct device_node *mem_np;
 	struct resource res;
@@ -1349,8 +1356,8 @@ static int apollo_hexagon_map_shared(struct device *dev,
 	return 0;
 }
 
-static void apollo_hexagon_write_guest_input(struct apollo_hexagon_test *test,
-					    const struct apollo_hexagon_cnn_job *job)
+static void apollo_hexagon_write_guest_input(struct apollo_hexagon *test,
+					    const struct drm_apollo_hexagon_cnn_job *job)
 {
 	int i;
 
@@ -1360,8 +1367,8 @@ static void apollo_hexagon_write_guest_input(struct apollo_hexagon_test *test,
 		       i * sizeof(u32));
 }
 
-static void apollo_hexagon_read_guest_output(struct apollo_hexagon_test *test,
-					     struct apollo_hexagon_cnn_job *job)
+static void apollo_hexagon_read_guest_output(struct apollo_hexagon *test,
+					     struct drm_apollo_hexagon_cnn_job *job)
 {
 	int i;
 
@@ -1371,8 +1378,8 @@ static void apollo_hexagon_read_guest_output(struct apollo_hexagon_test *test,
 			      i * sizeof(u32));
 }
 
-static void apollo_hexagon_write_guest_vadd_input(struct apollo_hexagon_test *test,
-						  const struct apollo_hexagon_vadd_job *job)
+static void apollo_hexagon_write_guest_vadd_input(struct apollo_hexagon *test,
+						  const struct drm_apollo_hexagon_vadd_job *job)
 {
 	int i;
 
@@ -1386,8 +1393,8 @@ static void apollo_hexagon_write_guest_vadd_input(struct apollo_hexagon_test *te
 	}
 }
 
-static void apollo_hexagon_read_guest_vadd_output(struct apollo_hexagon_test *test,
-						  struct apollo_hexagon_vadd_job *job)
+static void apollo_hexagon_read_guest_vadd_output(struct apollo_hexagon *test,
+						  struct drm_apollo_hexagon_vadd_job *job)
 {
 	int i;
 
@@ -1398,8 +1405,8 @@ static void apollo_hexagon_read_guest_vadd_output(struct apollo_hexagon_test *te
 }
 
 static int apollo_hexagon_submit_cnn(struct device *dev,
-				     struct apollo_hexagon_test *test,
-				     struct apollo_hexagon_cnn_job *job)
+				     struct apollo_hexagon *test,
+				     struct drm_apollo_hexagon_cnn_job *job)
 {
 	const u32 input_iova = lower_32_bits(test->dma_iova_base +
 					     APOLLO_HEXAGON_INPUT_OFFSET);
@@ -1456,8 +1463,8 @@ out_unlock:
 }
 
 static int apollo_hexagon_submit_vadd(struct device *dev,
-				      struct apollo_hexagon_test *test,
-				      struct apollo_hexagon_vadd_job *job)
+				      struct apollo_hexagon *test,
+				      struct drm_apollo_hexagon_vadd_job *job)
 {
 	const u32 input_iova = lower_32_bits(test->dma_iova_base +
 					     APOLLO_HEXAGON_INPUT_OFFSET);
@@ -1519,7 +1526,7 @@ static u32 apollo_hexagon_stress_word(u32 index, u32 seed)
 	return seed ^ (0x9e3779b9u * (index + 1));
 }
 
-static void apollo_hexagon_stress_write_segment(struct apollo_hexagon_test *test,
+static void apollo_hexagon_stress_write_segment(struct apollo_hexagon *test,
 						u32 offset, u32 first_word,
 						u32 words, u32 seed)
 {
@@ -1530,7 +1537,7 @@ static void apollo_hexagon_stress_write_segment(struct apollo_hexagon_test *test
 		       test->shared_base + offset + i * sizeof(u32));
 }
 
-static u32 apollo_hexagon_stress_verify_segment(struct apollo_hexagon_test *test,
+static u32 apollo_hexagon_stress_verify_segment(struct apollo_hexagon *test,
 						u32 offset, u32 first_word,
 						u32 words, u32 seed,
 						bool *matched)
@@ -1550,7 +1557,7 @@ static u32 apollo_hexagon_stress_verify_segment(struct apollo_hexagon_test *test
 	return checksum;
 }
 
-static void apollo_hexagon_stress_clear_segment(struct apollo_hexagon_test *test,
+static void apollo_hexagon_stress_clear_segment(struct apollo_hexagon *test,
 						u32 offset, u32 words)
 {
 	u32 i;
@@ -1560,7 +1567,7 @@ static void apollo_hexagon_stress_clear_segment(struct apollo_hexagon_test *test
 }
 
 static int apollo_hexagon_wait_job(struct device *dev,
-				   struct apollo_hexagon_test *test,
+				   struct apollo_hexagon *test,
 				   u32 queue_id, u32 expected_result,
 				   u32 *fence_seq)
 {
@@ -1627,8 +1634,8 @@ static int apollo_hexagon_wait_job(struct device *dev,
 }
 
 static int apollo_hexagon_submit_dma_stress(struct device *dev,
-					    struct apollo_hexagon_test *test,
-					    struct apollo_hexagon_dma_stress_job *job)
+					    struct apollo_hexagon *test,
+					    struct drm_apollo_hexagon_dma_stress_job *job)
 {
 	const u32 bytes = job->bytes ? job->bytes :
 		APOLLO_HEXAGON_DMA_STRESS_BYTES;
@@ -1728,92 +1735,114 @@ out_unlock:
 	return ret;
 }
 
-static int apollo_hexagon_open(struct inode *inode, struct file *file)
+static int apollo_hexagon_ioctl_query(struct drm_device *drm, void *data,
+				      struct drm_file *file)
 {
-	struct miscdevice *miscdev = file->private_data;
-	struct apollo_hexagon_test *test =
-		container_of(miscdev, struct apollo_hexagon_test, miscdev);
+	struct apollo_hexagon *test = to_apollo_hexagon(drm);
+	struct drm_apollo_hexagon_query *args = data;
+	int idx;
 
-	file->private_data = test;
+	if (!drm_dev_enter(drm, &idx))
+		return -ENODEV;
+
+	args->stream_id = test->stream_id;
+	args->queue_count = readl(test->regs + APOLLO_HEXAGON_REG_QUEUE_CAPS);
+	args->capabilities = readl(test->regs + APOLLO_HEXAGON_REG_CAPS);
+	args->dma_path = readl(test->regs + APOLLO_HEXAGON_REG_PATH);
+	args->primary_endpoint = test->primary_endpoint;
+	args->pad = 0;
+
+	drm_dev_exit(idx);
+
 	return 0;
 }
 
-static long apollo_hexagon_ioctl(struct file *file, unsigned int cmd,
-				 unsigned long arg)
+static int apollo_hexagon_ioctl_submit_cnn(struct drm_device *drm, void *data,
+					   struct drm_file *file)
 {
-	struct apollo_hexagon_test *test = file->private_data;
-	struct apollo_hexagon_cnn_job job;
-	struct apollo_hexagon_vadd_job vadd;
-	struct apollo_hexagon_dma_stress_job stress;
+	struct apollo_hexagon *test = to_apollo_hexagon(drm);
+	int idx;
 	int ret;
 
-	switch (cmd) {
-	case APOLLO_HEXAGON_IOC_SUBMIT_CNN:
-		if (copy_from_user(&job, (void __user *)arg, sizeof(job)))
-			return -EFAULT;
+	if (!drm_dev_enter(drm, &idx))
+		return -ENODEV;
 
-		ret = apollo_hexagon_submit_cnn(test->miscdev.parent, test,
-						&job);
-		if (ret)
-			return ret;
+	ret = apollo_hexagon_submit_cnn(test->dev, test, data);
+	drm_dev_exit(idx);
 
-		if (copy_to_user((void __user *)arg, &job, sizeof(job)))
-			return -EFAULT;
-
-		return 0;
-	case APOLLO_HEXAGON_IOC_SUBMIT_VADD:
-		if (copy_from_user(&vadd, (void __user *)arg, sizeof(vadd)))
-			return -EFAULT;
-
-		ret = apollo_hexagon_submit_vadd(test->miscdev.parent, test,
-						 &vadd);
-		if (ret)
-			return ret;
-
-		if (copy_to_user((void __user *)arg, &vadd, sizeof(vadd)))
-			return -EFAULT;
-
-		return 0;
-	case APOLLO_HEXAGON_IOC_DMA_STRESS:
-		if (copy_from_user(&stress, (void __user *)arg,
-				   sizeof(stress)))
-			return -EFAULT;
-		if (!stress.seed)
-			stress.seed = APOLLO_HEXAGON_STRESS_SEED;
-
-		ret = apollo_hexagon_submit_dma_stress(test->miscdev.parent,
-						       test, &stress);
-		if (ret)
-			return ret;
-
-		if (copy_to_user((void __user *)arg, &stress,
-				 sizeof(stress)))
-			return -EFAULT;
-
-		return 0;
-	default:
-		return -ENOTTY;
-	}
+	return ret;
 }
 
-static const struct file_operations apollo_hexagon_fops = {
-	.owner = THIS_MODULE,
-	.open = apollo_hexagon_open,
-	.unlocked_ioctl = apollo_hexagon_ioctl,
-	.compat_ioctl = compat_ptr_ioctl,
-	.llseek = noop_llseek,
+static int apollo_hexagon_ioctl_submit_vadd(struct drm_device *drm, void *data,
+					    struct drm_file *file)
+{
+	struct apollo_hexagon *test = to_apollo_hexagon(drm);
+	int idx;
+	int ret;
+
+	if (!drm_dev_enter(drm, &idx))
+		return -ENODEV;
+
+	ret = apollo_hexagon_submit_vadd(test->dev, test, data);
+	drm_dev_exit(idx);
+
+	return ret;
+}
+
+static int apollo_hexagon_ioctl_dma_stress(struct drm_device *drm, void *data,
+					   struct drm_file *file)
+{
+	struct apollo_hexagon *test = to_apollo_hexagon(drm);
+	struct drm_apollo_hexagon_dma_stress_job *job = data;
+	int idx;
+	int ret;
+
+	if (!job->seed)
+		job->seed = APOLLO_HEXAGON_STRESS_SEED;
+
+	if (!drm_dev_enter(drm, &idx))
+		return -ENODEV;
+
+	ret = apollo_hexagon_submit_dma_stress(test->dev, test, job);
+	drm_dev_exit(idx);
+
+	return ret;
+}
+
+#define APOLLO_HEXAGON_IOCTL(n, func) \
+	DRM_IOCTL_DEF_DRV(APOLLO_HEXAGON_##n, apollo_hexagon_ioctl_##func, 0)
+
+static const struct drm_ioctl_desc apollo_hexagon_drm_ioctls[] = {
+	APOLLO_HEXAGON_IOCTL(QUERY, query),
+	APOLLO_HEXAGON_IOCTL(SUBMIT_CNN, submit_cnn),
+	APOLLO_HEXAGON_IOCTL(SUBMIT_VADD, submit_vadd),
+	APOLLO_HEXAGON_IOCTL(DMA_STRESS, dma_stress),
+};
+
+DEFINE_DRM_ACCEL_FOPS(apollo_hexagon_accel_fops);
+
+static const struct drm_driver apollo_hexagon_drm_driver = {
+	.driver_features = DRIVER_COMPUTE_ACCEL | DRIVER_GEM,
+	.ioctls = apollo_hexagon_drm_ioctls,
+	.num_ioctls = ARRAY_SIZE(apollo_hexagon_drm_ioctls),
+	.fops = &apollo_hexagon_accel_fops,
+	.name = "apollo_hexagon",
+	.desc = "Apollo Hexagon DRM accel driver",
+	.major = 1,
+	.minor = 0,
 };
 
 static int apollo_hexagon_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct apollo_hexagon_test *test;
+	struct apollo_hexagon *test;
 	u32 *word;
 	int ret;
 
-	test = devm_kzalloc(dev, sizeof(*test), GFP_KERNEL);
-	if (!test)
-		return -ENOMEM;
+	test = devm_drm_dev_alloc(dev, &apollo_hexagon_drm_driver,
+				  struct apollo_hexagon, drm);
+	if (IS_ERR(test))
+		return PTR_ERR(test);
 	test->dev = dev;
 
 	test->regs = devm_platform_ioremap_resource(pdev, 0);
@@ -1898,29 +1927,17 @@ static int apollo_hexagon_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, test);
 	test->primary_endpoint =
 		of_property_read_bool(dev->of_node, "apollo,primary-endpoint");
-	test->miscdev.minor = MISC_DYNAMIC_MINOR;
-	if (test->primary_endpoint) {
-		test->miscdev.name = "apollo-hexagon";
-	} else {
-		test->miscdev.name = devm_kasprintf(dev, GFP_KERNEL,
-						    "apollo-hexagon-%x",
-						    test->stream_id);
-		if (!test->miscdev.name)
-			return -ENOMEM;
-	}
-	test->miscdev.fops = &apollo_hexagon_fops;
-	test->miscdev.parent = dev;
-	ret = misc_register(&test->miscdev);
+
+	ret = drm_dev_register(&test->drm, 0);
 	if (ret)
 		return dev_err_probe(dev, ret,
-				     "failed to register /dev/%s\n",
-				     test->miscdev.name);
+				     "failed to register DRM accel device\n");
 
 	dev_info(dev, "dma selftest ok dma=%pad size=%zu\n",
 		 &test->dma_addr, test->size);
 	dev_info(dev,
-		 "userspace submit ABI ready at /dev/%s stream-id=0x%x primary=%u\n",
-		 test->miscdev.name, test->stream_id, test->primary_endpoint);
+		 "userspace submit ABI ready at /dev/accel/accel* stream-id=0x%x primary=%u\n",
+		 test->stream_id, test->primary_endpoint);
 	dev_info(dev, "probe ok\n");
 
 	return 0;
@@ -1928,10 +1945,9 @@ static int apollo_hexagon_probe(struct platform_device *pdev)
 
 static void apollo_hexagon_remove(struct platform_device *pdev)
 {
-	struct apollo_hexagon_test *test = platform_get_drvdata(pdev);
+	struct apollo_hexagon *test = platform_get_drvdata(pdev);
 
-	if (test)
-		misc_deregister(&test->miscdev);
+	drm_dev_unplug(&test->drm);
 }
 
 static const struct of_device_id apollo_hexagon_of_match[] = {
@@ -1944,11 +1960,11 @@ static struct platform_driver apollo_hexagon_driver = {
 	.probe = apollo_hexagon_probe,
 	.remove = apollo_hexagon_remove,
 	.driver = {
-		.name = "apollo-hexagon-test",
+		.name = "apollo-hexagon",
 		.of_match_table = apollo_hexagon_of_match,
 	},
 };
 module_platform_driver(apollo_hexagon_driver);
 
-MODULE_DESCRIPTION("Apollo Hexagon IOMMU probe driver");
+MODULE_DESCRIPTION("Apollo Hexagon DRM accel driver");
 MODULE_LICENSE("GPL");
