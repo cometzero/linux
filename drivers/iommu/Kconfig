@@ -158,6 +158,18 @@ config IOMMU_DMA
 	select NEED_SG_DMA_LENGTH
 	select NEED_SG_DMA_FLAGS if SWIOTLB
 
+config IOMMU_TEST
+	bool "IOMMU runtime test driver"
+	depends on OF
+	depends on HAS_DMA
+	select IOMMU_API
+	help
+	  Build a small platform driver for synthetic IOMMU runtime test
+	  devices. The driver validates IOMMU group/domain attachment, DMA API
+	  mappings, IOVA-to-physical translation, and platform data-plane
+	  smoke-test paths when the device tree provides the required
+	  resources.
+
 # Shared Virtual Addressing
 config IOMMU_SVA
 	select IOMMU_MM_DATA
