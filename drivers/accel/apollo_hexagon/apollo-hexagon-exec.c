@@ -56,6 +56,7 @@ struct apollo_hexagon_loaded_exec {
 	u32 payload_opcode;
 	u32 payload_code_words;
 	u32 payload_entry_word;
+	u32 payload_end_word;
 };
 
 static void apollo_hexagon_write_guest_words(struct apollo_hexagon *test,
@@ -246,6 +247,17 @@ static bool apollo_hexagon_apko_code_entry_kind(u32 code_entry, u32 *entry_kind)
 	return true;
 }
 
+static bool apollo_hexagon_apko_code_program_kind(const u32 *code_words,
+						  u32 word_count,
+						  u32 *entry_kind)
+{
+	if (word_count != APOLLO_HEXAGON_APKO_CODE_PROGRAM_WORDS)
+		return false;
+	if (code_words[1] != APOLLO_HEXAGON_APKO_CODE_OP_END)
+		return false;
+	return apollo_hexagon_apko_code_entry_kind(code_words[0], entry_kind);
+}
+
 static bool apollo_hexagon_cmdq_load_payload_is_valid(
 	const u32 *packet, const struct apollo_hexagon_loaded_exec *loaded)
 {
@@ -260,7 +272,8 @@ static bool apollo_hexagon_cmdq_load_payload_is_valid(
 	    packet[3] != APOLLO_HEXAGON_APKO_PAYLOAD_VERSION ||
 	    packet[5] != APOLLO_HEXAGON_APKO_PAYLOAD_DESCRIPTOR_WORDS)
 		return false;
-	if (packet[6] == 0 || packet[7] != 0)
+	if (packet[6] != APOLLO_HEXAGON_APKO_CODE_PROGRAM_WORDS ||
+	    packet[7] != 0)
 		return false;
 	if (!apollo_hexagon_cmdq_payload_opcode_valid(payload_opcode))
 		return false;
@@ -273,6 +286,9 @@ static bool apollo_hexagon_cmdq_load_code_is_valid(
 	u32 slot = packet[1];
 	u32 word_offset = packet[4];
 	u32 word_count = packet[5];
+	u32 code_words[APOLLO_HEXAGON_APKO_CODE_PROGRAM_WORDS] = {
+		packet[6], packet[7]
+	};
 	u32 entry_kind;
 
 	if (slot == 0 || slot > APOLLO_HEXAGON_CMDQ_EXEC_SLOT_MAX)
@@ -282,11 +298,10 @@ static bool apollo_hexagon_cmdq_load_code_is_valid(
 	if (packet[2] != APOLLO_HEXAGON_APKO_CODE_MAGIC ||
 	    packet[3] != APOLLO_HEXAGON_APKO_CODE_VERSION)
 		return false;
-	if (word_offset != 0 || word_count != 1 || packet[7] != 0)
+	if (word_offset != 0 || word_count != loaded[slot].payload_code_words)
 		return false;
-	if (word_count > loaded[slot].payload_code_words)
-		return false;
-	if (!apollo_hexagon_apko_code_entry_kind(packet[6], &entry_kind))
+	if (!apollo_hexagon_apko_code_program_kind(code_words, word_count,
+						  &entry_kind))
 		return false;
 	return entry_kind == loaded[slot].payload_opcode;
 }
@@ -313,6 +328,7 @@ static bool apollo_hexagon_cmdq_packet_is_bound_dispatch(
 	const u32 *packet, const struct apollo_hexagon_loaded_exec *loaded,
 	u32 *entry_kind)
 {
+	u32 code_words[APOLLO_HEXAGON_APKO_CODE_PROGRAM_WORDS];
 	u32 slot;
 
 	if (packet[0] != APOLLO_HEXAGON_CMDQ_OPCODE_DISPATCH)
@@ -327,8 +343,10 @@ static bool apollo_hexagon_cmdq_packet_is_bound_dispatch(
 		return false;
 
 	slot = packet[1] & ~APOLLO_HEXAGON_CMDQ_DISPATCH_EXEC_SLOT_FLAG;
-	return apollo_hexagon_apko_code_entry_kind(
-		loaded[slot].payload_entry_word, entry_kind);
+	code_words[0] = loaded[slot].payload_entry_word;
+	code_words[1] = loaded[slot].payload_end_word;
+	return apollo_hexagon_apko_code_program_kind(
+		code_words, loaded[slot].payload_code_words, entry_kind);
 }
 
 static u64 apollo_hexagon_cmdq_packet_iova(u32 lo, u32 hi)
@@ -434,6 +452,7 @@ static int apollo_hexagon_prepare_bound_dispatch(
 			loaded[slot].payload_opcode = 0;
 			loaded[slot].payload_code_words = 0;
 			loaded[slot].payload_entry_word = 0;
+			loaded[slot].payload_end_word = 0;
 			dev_info(dev,
 				 "command BO LOAD_EXECUTABLE slot=%u kind=%u input=%u output=%u\n",
 				 slot, packet[5], packet[6], packet[7]);
@@ -448,6 +467,7 @@ static int apollo_hexagon_prepare_bound_dispatch(
 			loaded[slot].payload_opcode = packet[4];
 			loaded[slot].payload_code_words = packet[6];
 			loaded[slot].payload_entry_word = 0;
+			loaded[slot].payload_end_word = 0;
 			dev_info(dev,
 				 "command BO LOAD_PAYLOAD slot=%u opcode=%u words=%u code_words=%u\n",
 				 slot, packet[4], packet[5], packet[6]);
@@ -459,9 +479,11 @@ static int apollo_hexagon_prepare_bound_dispatch(
 			slot = packet[1];
 			loaded[slot].code_valid = true;
 			loaded[slot].payload_entry_word = packet[6];
+			loaded[slot].payload_end_word = packet[7];
 			dev_info(dev,
-				 "command BO LOAD_CODE slot=%u offset=%u words=%u entry_word=%u\n",
-				 slot, packet[4], packet[5], packet[6]);
+				 "command BO LOAD_CODE slot=%u offset=%u words=%u entry_word=%u end_word=%u\n",
+				 slot, packet[4], packet[5], packet[6],
+				 packet[7]);
 			continue;
 		}
 
