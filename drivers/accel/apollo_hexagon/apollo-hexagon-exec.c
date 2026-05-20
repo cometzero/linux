@@ -285,7 +285,7 @@ static bool apollo_hexagon_cmdq_packet_is_bound_dispatch(
 		return false;
 
 	slot = packet[1] & ~APOLLO_HEXAGON_CMDQ_DISPATCH_EXEC_SLOT_FLAG;
-	*entry_kind = loaded[slot].entry_kind;
+	*entry_kind = loaded[slot].payload_entry_word;
 	return *entry_kind == APOLLO_HEXAGON_EXEC_KIND_CNN ||
 	       *entry_kind == APOLLO_HEXAGON_EXEC_KIND_VADD ||
 	       *entry_kind == APOLLO_HEXAGON_EXEC_KIND_MNIST;
