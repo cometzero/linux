@@ -229,11 +229,28 @@ static bool apollo_hexagon_cmdq_payload_opcode_valid(u32 payload_opcode)
 	       payload_opcode == APOLLO_HEXAGON_EXEC_KIND_MNIST;
 }
 
+static bool apollo_hexagon_apko_code_entry_kind(u32 code_entry, u32 *entry_kind)
+{
+	u32 kind;
+
+	if ((code_entry & APOLLO_HEXAGON_APKO_CODE_OP_MASK) !=
+	    APOLLO_HEXAGON_APKO_CODE_OP_MODEL_DISPATCH)
+		return false;
+
+	kind = code_entry & APOLLO_HEXAGON_APKO_CODE_MODEL_MASK;
+	if (!apollo_hexagon_cmdq_payload_opcode_valid(kind))
+		return false;
+
+	*entry_kind = kind;
+	return true;
+}
+
 static bool apollo_hexagon_cmdq_load_payload_is_valid(
 	const u32 *packet, const struct apollo_hexagon_loaded_exec *loaded)
 {
 	u32 slot = packet[1];
 	u32 payload_opcode = packet[4];
+	u32 entry_kind;
 
 	if (slot == 0 || slot > APOLLO_HEXAGON_CMDQ_EXEC_SLOT_MAX)
 		return false;
@@ -243,7 +260,9 @@ static bool apollo_hexagon_cmdq_load_payload_is_valid(
 	    packet[3] != APOLLO_HEXAGON_APKO_PAYLOAD_VERSION ||
 	    packet[5] != APOLLO_HEXAGON_APKO_PAYLOAD_DESCRIPTOR_WORDS)
 		return false;
-	if (packet[6] == 0 || packet[7] != payload_opcode)
+	if (packet[6] == 0 ||
+	    !apollo_hexagon_apko_code_entry_kind(packet[7], &entry_kind) ||
+	    entry_kind != payload_opcode)
 		return false;
 	if (!apollo_hexagon_cmdq_payload_opcode_valid(payload_opcode))
 		return false;
@@ -285,10 +304,8 @@ static bool apollo_hexagon_cmdq_packet_is_bound_dispatch(
 		return false;
 
 	slot = packet[1] & ~APOLLO_HEXAGON_CMDQ_DISPATCH_EXEC_SLOT_FLAG;
-	*entry_kind = loaded[slot].payload_entry_word;
-	return *entry_kind == APOLLO_HEXAGON_EXEC_KIND_CNN ||
-	       *entry_kind == APOLLO_HEXAGON_EXEC_KIND_VADD ||
-	       *entry_kind == APOLLO_HEXAGON_EXEC_KIND_MNIST;
+	return apollo_hexagon_apko_code_entry_kind(
+		loaded[slot].payload_entry_word, entry_kind);
 }
 
 static u64 apollo_hexagon_cmdq_packet_iova(u32 lo, u32 hi)
