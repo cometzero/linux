@@ -854,84 +854,6 @@ int apollo_hexagon_ioctl_exec_destroy(struct drm_device *drm, void *data,
 	return 0;
 }
 
-static void apollo_hexagon_record_submit_fault(
-	struct apollo_hexagon_file *afile,
-	const struct apollo_hexagon_executable *exe,
-	const struct drm_apollo_hexagon_submit *job, u32 status, u32 result)
-{
-	struct drm_apollo_hexagon_fault fault = { 0 };
-
-	fault.size = sizeof(fault);
-	fault.queue_id = job->queue_id ? job->queue_id : exe->queue_id;
-	fault.code = APOLLO_HEXAGON_FAULT_CODE_JOB_FAILED;
-	fault.status = status;
-	fault.result = result;
-	fault.fence_seq = job->fence_seq;
-
-	mutex_lock(&afile->lock);
-	afile->last_fault = fault;
-	afile->has_fault = true;
-	mutex_unlock(&afile->lock);
-}
-
-static void apollo_hexagon_record_cmd_fault(
-	struct apollo_hexagon_file *afile,
-	const struct drm_apollo_hexagon_cmd_submit *submit,
-	u32 status, u32 fault_code)
-{
-	struct drm_apollo_hexagon_fault fault = { 0 };
-
-	fault.size = sizeof(fault);
-	fault.queue_id = submit->queue_id;
-	fault.code = APOLLO_HEXAGON_FAULT_CODE_JOB_FAILED;
-	fault.status = status;
-	fault.result = fault_code;
-	fault.fence_seq = submit->fence_seq;
-
-	mutex_lock(&afile->lock);
-	afile->last_fault = fault;
-	afile->has_fault = true;
-	mutex_unlock(&afile->lock);
-}
-
-int apollo_hexagon_ioctl_get_fault(struct drm_device *drm, void *data,
-				   struct drm_file *file)
-{
-	struct apollo_hexagon_file *afile = file->driver_priv;
-	struct drm_apollo_hexagon_fault *args = data;
-	struct drm_apollo_hexagon_fault fault;
-	bool clear;
-	int ret = 0;
-
-	if (!afile)
-		return -EINVAL;
-	if (args->size != sizeof(*args) ||
-	    (args->flags & ~APOLLO_HEXAGON_GET_FAULT_FLAG_CLEAR))
-		return -EINVAL;
-	if (args->reserved[0] || args->reserved[1] ||
-	    args->reserved[2] || args->reserved[3] || args->reserved[4])
-		return -EINVAL;
-
-	clear = args->flags & APOLLO_HEXAGON_GET_FAULT_FLAG_CLEAR;
-
-	mutex_lock(&afile->lock);
-	if (!afile->has_fault) {
-		ret = -ENODATA;
-		goto out_unlock;
-	}
-
-	fault = afile->last_fault;
-	if (clear) {
-		memset(&afile->last_fault, 0, sizeof(afile->last_fault));
-		afile->has_fault = false;
-	}
-	*args = fault;
-
-out_unlock:
-	mutex_unlock(&afile->lock);
-	return ret;
-}
-
 int apollo_hexagon_ioctl_cmd_submit(struct drm_device *drm, void *data,
 				    struct drm_file *file)
 {
@@ -1063,8 +985,8 @@ out_dev_exit:
 out_bound_dispatch:
 	apollo_hexagon_bound_dispatch_put(&bound_dispatch);
 	if (ret == -EIO)
-		apollo_hexagon_record_cmd_fault(afile, args, cmdq_status,
-						cmdq_fault);
+		apollo_hexagon_record_fault(afile, args->queue_id, cmdq_status,
+					   cmdq_fault, args->fence_seq);
 	return ret;
 }
 
@@ -1105,8 +1027,9 @@ int apollo_hexagon_ioctl_submit(struct drm_device *drm, void *data,
 					       &job_status, &job_result);
 	drm_dev_exit(idx);
 	if (ret == -EIO)
-		apollo_hexagon_record_submit_fault(afile, &exe, args, job_status,
-						   job_result);
+		apollo_hexagon_record_fault(afile,
+					   args->queue_id ? args->queue_id : exe.queue_id,
+					   job_status, job_result, args->fence_seq);
 
 	return ret;
 }

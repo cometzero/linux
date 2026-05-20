@@ -149,6 +149,8 @@ int apollo_hexagon_tbu_map(struct device *dev, struct apollo_hexagon *test,
 			   u64 iova, phys_addr_t pa, u64 size);
 void apollo_hexagon_prepare_async_fence(struct apollo_hexagon *test,
 					u32 queue_id);
+int apollo_hexagon_configure_linux_iommu(struct device *dev,
+						struct apollo_hexagon *test);
 int apollo_hexagon_dynamic_map(struct device *dev,
 			       struct apollo_hexagon *test);
 int apollo_hexagon_wait_job(struct device *dev, struct apollo_hexagon *test,
@@ -201,6 +203,9 @@ int apollo_hexagon_ioctl_submit(struct drm_device *drm, void *data,
 				struct drm_file *file);
 int apollo_hexagon_ioctl_cmd_submit(struct drm_device *drm, void *data,
 				    struct drm_file *file);
+void apollo_hexagon_record_fault(struct apollo_hexagon_file *afile,
+				 u32 queue_id, u32 status, u32 result,
+				 u32 fence_seq);
 int apollo_hexagon_ioctl_get_fault(struct drm_device *drm, void *data,
 				   struct drm_file *file);
 int apollo_hexagon_ioctl_wait(struct drm_device *drm, void *data,
