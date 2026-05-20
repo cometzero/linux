@@ -22,6 +22,9 @@
 
 #include "apollo-hexagon.h"
 
+#define APOLLO_HEXAGON_MAX_INPUT_WORDS APOLLO_HEXAGON_MNIST_INPUT_WORDS
+#define APOLLO_HEXAGON_MAX_OUTPUT_WORDS APOLLO_HEXAGON_MNIST_OUTPUT_WORDS
+
 struct apollo_hexagon_executable {
 	u32 handle;
 	u32 entry_kind;
@@ -40,7 +43,7 @@ struct apollo_hexagon_bound_dispatch {
 	u64 output_offset;
 	u32 input_bytes;
 	u32 output_bytes;
-	u32 input[APOLLO_HEXAGON_CNN_INPUT_WORDS];
+	u32 *input;
 };
 
 struct apollo_hexagon_loaded_exec {
@@ -287,21 +290,31 @@ static int apollo_hexagon_prepare_bound_dispatch_packet(
 						  output_bytes))
 		return 0;
 
+	bound->input = kmalloc(input_bytes, GFP_KERNEL);
+	if (!bound->input)
+		return -ENOMEM;
+
 	ret = apollo_hexagon_context_copy_from_iova(
 		ctx, input_iova, input_bytes, APOLLO_HEXAGON_BO_BIND_USAGE_READ,
 		bound->input);
-	if (ret == -ENOENT)
+	if (ret == -ENOENT) {
+		kfree(bound->input);
+		bound->input = NULL;
 		return 0;
+	}
 	if (ret)
-		return ret;
+		goto out_free_input;
 
 	ret = apollo_hexagon_context_get_iova_bo(
 		ctx, output_iova, output_bytes, APOLLO_HEXAGON_BO_BIND_USAGE_WRITE,
 		&bound->output_obj, &bound->output_offset);
-	if (ret == -ENOENT)
+	if (ret == -ENOENT) {
+		kfree(bound->input);
+		bound->input = NULL;
 		return 0;
+	}
 	if (ret)
-		return ret;
+		goto out_free_input;
 
 	bound->active = true;
 	bound->packet = packet;
@@ -315,6 +328,11 @@ static int apollo_hexagon_prepare_bound_dispatch_packet(
 		 input_iova, output_iova, input_bytes, output_bytes);
 
 	return 0;
+
+out_free_input:
+	kfree(bound->input);
+	bound->input = NULL;
+	return ret;
 }
 
 static int apollo_hexagon_prepare_bound_dispatch(
@@ -377,6 +395,7 @@ apollo_hexagon_patch_bound_dispatch(struct apollo_hexagon *test,
 static void
 apollo_hexagon_bound_dispatch_put(struct apollo_hexagon_bound_dispatch *bound)
 {
+	kfree(bound->input);
 	if (bound->output_obj)
 		drm_gem_object_put(bound->output_obj);
 	memset(bound, 0, sizeof(*bound));
@@ -384,7 +403,7 @@ apollo_hexagon_bound_dispatch_put(struct apollo_hexagon_bound_dispatch *bound)
 
 static int apollo_hexagon_copy_submit_input(
 	const struct apollo_hexagon_executable *exe,
-	const struct drm_apollo_hexagon_submit *job, u32 *input)
+	const struct drm_apollo_hexagon_submit *job, u32 **input)
 {
 	if (!job->input_ptr || !job->output_ptr)
 		return -EINVAL;
@@ -394,13 +413,20 @@ static int apollo_hexagon_copy_submit_input(
 	if (job->input_bytes % sizeof(u32) ||
 	    job->output_bytes % sizeof(u32))
 		return -EINVAL;
-	if (job->input_bytes > APOLLO_HEXAGON_CNN_INPUT_WORDS * sizeof(u32) ||
-	    job->output_bytes > APOLLO_HEXAGON_CNN_OUTPUT_WORDS * sizeof(u32))
+	if (job->input_bytes > APOLLO_HEXAGON_MAX_INPUT_WORDS * sizeof(u32) ||
+	    job->output_bytes > APOLLO_HEXAGON_MAX_OUTPUT_WORDS * sizeof(u32))
 		return -EINVAL;
 
-	if (copy_from_user(input, u64_to_user_ptr(job->input_ptr),
-			   job->input_bytes))
+	*input = kmalloc(job->input_bytes, GFP_KERNEL);
+	if (!*input)
+		return -ENOMEM;
+
+	if (copy_from_user(*input, u64_to_user_ptr(job->input_ptr),
+			   job->input_bytes)) {
+		kfree(*input);
+		*input = NULL;
 		return -EFAULT;
+	}
 
 	return 0;
 }
@@ -414,8 +440,8 @@ static int apollo_hexagon_submit_executable(
 	const u64 input_iova = test->dma_iova_base + APOLLO_HEXAGON_INPUT_OFFSET;
 	const u64 output_iova = test->dma_iova_base + APOLLO_HEXAGON_OUTPUT_OFFSET;
 	const u64 cmdq_iova = test->dma_iova_base + APOLLO_HEXAGON_CMDQ_OFFSET;
-	u32 input[APOLLO_HEXAGON_CNN_INPUT_WORDS] = { 0 };
-	u32 output[APOLLO_HEXAGON_CNN_OUTPUT_WORDS] = { 0 };
+	u32 *input;
+	u32 *output;
 	bool use_cmdq_dispatch = exe->entry_kind == APOLLO_HEXAGON_EXEC_KIND_VADD ||
 				 exe->entry_kind == APOLLO_HEXAGON_EXEC_KIND_MNIST;
 	u32 input_words;
@@ -429,16 +455,23 @@ static int apollo_hexagon_submit_executable(
 	u32 final_result = 0;
 	int ret;
 
-	ret = apollo_hexagon_copy_submit_input(exe, job, input);
+	ret = apollo_hexagon_copy_submit_input(exe, job, &input);
 	if (ret)
 		return ret;
 
 	queue_id = job->queue_id ? job->queue_id : exe->queue_id;
-	if (queue_id != exe->queue_id)
-		return -EINVAL;
+	if (queue_id != exe->queue_id) {
+		ret = -EINVAL;
+		goto out_free_input;
+	}
 
 	input_words = exe->input_bytes / sizeof(u32);
 	output_words = exe->output_bytes / sizeof(u32);
+	output = kcalloc(output_words, sizeof(*output), GFP_KERNEL);
+	if (!output) {
+		ret = -ENOMEM;
+		goto out_free_input;
+	}
 
 	mutex_lock(&test->lock);
 
@@ -553,13 +586,21 @@ static int apollo_hexagon_submit_executable(
 out_unlock:
 	mutex_unlock(&test->lock);
 	if (ret)
-		return ret;
+		goto out_free_output;
 
 	if (copy_to_user(u64_to_user_ptr(job->output_ptr), output,
-			 job->output_bytes))
-		return -EFAULT;
+			 job->output_bytes)) {
+		ret = -EFAULT;
+		goto out_free_output;
+	}
 
-	return 0;
+	ret = 0;
+
+out_free_output:
+	kfree(output);
+out_free_input:
+	kfree(input);
+	return ret;
 }
 
 static int apollo_hexagon_wait_cmdq(struct device *dev,
@@ -900,7 +941,7 @@ int apollo_hexagon_ioctl_cmd_submit(struct drm_device *drm, void *data,
 	struct apollo_hexagon_context *ctx;
 	struct apollo_hexagon_bound_dispatch bound_dispatch;
 	u32 command[APOLLO_HEXAGON_CMDQ_SUBMIT_MAX_BYTES / sizeof(u32)] = { 0 };
-	u32 output[APOLLO_HEXAGON_CNN_OUTPUT_WORDS] = { 0 };
+	u32 output[APOLLO_HEXAGON_MAX_OUTPUT_WORDS] = { 0 };
 	const u64 cmdq_iova = test->dma_iova_base + APOLLO_HEXAGON_CMDQ_OFFSET;
 	u32 queue_count;
 	u32 cmdq_status = 0;
