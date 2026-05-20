@@ -19,6 +19,7 @@
 #include <drm/drm_drv.h>
 
 struct drm_file;
+struct drm_gem_object;
 
 struct apollo_hexagon_file {
 	struct xarray contexts;
@@ -43,6 +44,18 @@ struct apollo_hexagon_bo_binding {
 	u32 handle;
 	u32 bo_handle;
 	u32 usage;
+};
+
+struct apollo_hexagon_bound_dispatch {
+	bool active;
+	u32 *packet;
+	u32 entry_kind;
+	struct drm_gem_object *output_obj;
+	u64 output_iova;
+	u64 output_offset;
+	u32 input_bytes;
+	u32 output_bytes;
+	u32 *input;
 };
 
 #define APOLLO_HEXAGON_ACCEL_TIMEOUT_MS		2000
@@ -157,6 +170,25 @@ int apollo_hexagon_wait_job(struct device *dev, struct apollo_hexagon *test,
 			    u32 queue_id, u32 expected_result,
 			    u32 *fence_seq, u32 *final_status,
 			    u32 *final_result);
+const char *apollo_hexagon_exec_kind_name(u32 entry_kind);
+void apollo_hexagon_cmdq_write_buffer(struct apollo_hexagon *test,
+				      const u32 *command, u32 bytes);
+void apollo_hexagon_cmdq_write_dispatch(struct apollo_hexagon *test,
+					u32 entry_kind, u64 input_iova,
+					u64 output_iova, u32 input_bytes,
+					u32 output_bytes);
+int apollo_hexagon_cmdq_prepare_bound_dispatch(
+	struct device *dev, struct apollo_hexagon_context *ctx, u32 *command,
+	u32 command_size, struct apollo_hexagon_bound_dispatch *bound);
+void apollo_hexagon_cmdq_patch_bound_dispatch(
+	struct apollo_hexagon *test,
+	const struct apollo_hexagon_bound_dispatch *bound);
+void apollo_hexagon_cmdq_bound_dispatch_put(
+	struct apollo_hexagon_bound_dispatch *bound);
+int apollo_hexagon_cmdq_wait(struct device *dev, struct apollo_hexagon *test,
+			     u32 queue_id, u32 expected_head, u32 *fence_seq,
+			     u32 *final_status, u32 *final_fault,
+			     u32 *final_head);
 int apollo_hexagon_file_open(struct drm_device *dev, struct drm_file *file);
 void apollo_hexagon_file_postclose(struct drm_device *dev,
 				   struct drm_file *file);
