@@ -49,6 +49,7 @@ struct apollo_hexagon_bound_dispatch {
 struct apollo_hexagon_loaded_exec {
 	bool valid;
 	bool payload_valid;
+	bool code_valid;
 	u32 entry_kind;
 	u32 input_bytes;
 	u32 output_bytes;
@@ -250,7 +251,6 @@ static bool apollo_hexagon_cmdq_load_payload_is_valid(
 {
 	u32 slot = packet[1];
 	u32 payload_opcode = packet[4];
-	u32 entry_kind;
 
 	if (slot == 0 || slot > APOLLO_HEXAGON_CMDQ_EXEC_SLOT_MAX)
 		return false;
@@ -260,13 +260,35 @@ static bool apollo_hexagon_cmdq_load_payload_is_valid(
 	    packet[3] != APOLLO_HEXAGON_APKO_PAYLOAD_VERSION ||
 	    packet[5] != APOLLO_HEXAGON_APKO_PAYLOAD_DESCRIPTOR_WORDS)
 		return false;
-	if (packet[6] == 0 ||
-	    !apollo_hexagon_apko_code_entry_kind(packet[7], &entry_kind) ||
-	    entry_kind != payload_opcode)
+	if (packet[6] == 0 || packet[7] != 0)
 		return false;
 	if (!apollo_hexagon_cmdq_payload_opcode_valid(payload_opcode))
 		return false;
 	return payload_opcode == loaded[slot].entry_kind;
+}
+
+static bool apollo_hexagon_cmdq_load_code_is_valid(
+	const u32 *packet, const struct apollo_hexagon_loaded_exec *loaded)
+{
+	u32 slot = packet[1];
+	u32 word_offset = packet[4];
+	u32 word_count = packet[5];
+	u32 entry_kind;
+
+	if (slot == 0 || slot > APOLLO_HEXAGON_CMDQ_EXEC_SLOT_MAX)
+		return false;
+	if (!loaded[slot].valid || !loaded[slot].payload_valid)
+		return false;
+	if (packet[2] != APOLLO_HEXAGON_APKO_CODE_MAGIC ||
+	    packet[3] != APOLLO_HEXAGON_APKO_CODE_VERSION)
+		return false;
+	if (word_offset != 0 || word_count != 1 || packet[7] != 0)
+		return false;
+	if (word_count > loaded[slot].payload_code_words)
+		return false;
+	if (!apollo_hexagon_apko_code_entry_kind(packet[6], &entry_kind))
+		return false;
+	return entry_kind == loaded[slot].payload_opcode;
 }
 
 static bool apollo_hexagon_cmdq_dispatch_uses_loaded_exec(
@@ -280,7 +302,8 @@ static bool apollo_hexagon_cmdq_dispatch_uses_loaded_exec(
 	slot = packet[1] & ~APOLLO_HEXAGON_CMDQ_DISPATCH_EXEC_SLOT_FLAG;
 	if (slot == 0 || slot > APOLLO_HEXAGON_CMDQ_EXEC_SLOT_MAX)
 		return false;
-	if (!loaded[slot].valid || !loaded[slot].payload_valid)
+	if (!loaded[slot].valid || !loaded[slot].payload_valid ||
+	    !loaded[slot].code_valid)
 		return false;
 	return packet[6] == loaded[slot].input_bytes &&
 	       packet[7] == loaded[slot].output_bytes;
@@ -404,6 +427,7 @@ static int apollo_hexagon_prepare_bound_dispatch(
 			slot = packet[1];
 			loaded[slot].valid = true;
 			loaded[slot].payload_valid = false;
+			loaded[slot].code_valid = false;
 			loaded[slot].entry_kind = packet[5];
 			loaded[slot].input_bytes = packet[6];
 			loaded[slot].output_bytes = packet[7];
@@ -420,13 +444,24 @@ static int apollo_hexagon_prepare_bound_dispatch(
 		    apollo_hexagon_cmdq_load_payload_is_valid(packet, loaded)) {
 			slot = packet[1];
 			loaded[slot].payload_valid = true;
+			loaded[slot].code_valid = false;
 			loaded[slot].payload_opcode = packet[4];
 			loaded[slot].payload_code_words = packet[6];
-			loaded[slot].payload_entry_word = packet[7];
+			loaded[slot].payload_entry_word = 0;
 			dev_info(dev,
-				 "command BO LOAD_PAYLOAD slot=%u opcode=%u words=%u code_words=%u entry_word=%u\n",
-				 slot, packet[4], packet[5], packet[6],
-				 packet[7]);
+				 "command BO LOAD_PAYLOAD slot=%u opcode=%u words=%u code_words=%u\n",
+				 slot, packet[4], packet[5], packet[6]);
+			continue;
+		}
+
+		if (packet[0] == APOLLO_HEXAGON_CMDQ_OPCODE_LOAD_CODE &&
+		    apollo_hexagon_cmdq_load_code_is_valid(packet, loaded)) {
+			slot = packet[1];
+			loaded[slot].code_valid = true;
+			loaded[slot].payload_entry_word = packet[6];
+			dev_info(dev,
+				 "command BO LOAD_CODE slot=%u offset=%u words=%u entry_word=%u\n",
+				 slot, packet[4], packet[5], packet[6]);
 			continue;
 		}
 
