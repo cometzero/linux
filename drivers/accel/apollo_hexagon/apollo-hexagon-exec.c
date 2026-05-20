@@ -31,14 +31,16 @@ struct apollo_hexagon_executable {
 	u32 expected_result;
 };
 
-struct apollo_hexagon_bound_vadd {
+struct apollo_hexagon_bound_dispatch {
 	bool active;
 	u32 *packet;
+	u32 entry_kind;
 	struct drm_gem_object *output_obj;
 	u64 output_iova;
 	u64 output_offset;
+	u32 input_bytes;
 	u32 output_bytes;
-	u32 input[APOLLO_HEXAGON_VADD_INPUT_WORDS];
+	u32 input[APOLLO_HEXAGON_CNN_INPUT_WORDS];
 };
 
 struct apollo_hexagon_loaded_exec {
@@ -148,6 +150,38 @@ static void apollo_hexagon_write_cmdq_dispatch_vadd(
 	apollo_hexagon_write_cmdq_packet(test, packet);
 }
 
+static const char *apollo_hexagon_exec_kind_name(u32 entry_kind)
+{
+	switch (entry_kind) {
+	case APOLLO_HEXAGON_EXEC_KIND_CNN:
+		return "CNN";
+	case APOLLO_HEXAGON_EXEC_KIND_VADD:
+		return "VADD";
+	default:
+		return "unknown";
+	}
+}
+
+static bool apollo_hexagon_cmdq_kind_sizes_valid(u32 entry_kind,
+						 u32 input_bytes,
+						 u32 output_bytes)
+{
+	switch (entry_kind) {
+	case APOLLO_HEXAGON_EXEC_KIND_CNN:
+		return input_bytes ==
+			       APOLLO_HEXAGON_CNN_INPUT_WORDS * sizeof(u32) &&
+		       output_bytes ==
+			       APOLLO_HEXAGON_CNN_OUTPUT_WORDS * sizeof(u32);
+	case APOLLO_HEXAGON_EXEC_KIND_VADD:
+		return input_bytes ==
+			       APOLLO_HEXAGON_VADD_INPUT_WORDS * sizeof(u32) &&
+		       output_bytes ==
+			       APOLLO_HEXAGON_VADD_OUTPUT_WORDS * sizeof(u32);
+	default:
+		return false;
+	}
+}
+
 static bool apollo_hexagon_cmdq_load_exec_is_valid(const u32 *packet)
 {
 	u32 slot = packet[1];
@@ -161,13 +195,11 @@ static bool apollo_hexagon_cmdq_load_exec_is_valid(const u32 *packet)
 	    packet[3] != APOLLO_HEXAGON_APKO_ABI_VERSION ||
 	    packet[4] != APOLLO_HEXAGON_EXEC_FORMAT_APKO_V0)
 		return false;
-	if (entry_kind != APOLLO_HEXAGON_EXEC_KIND_VADD)
-		return false;
-	return input_bytes == APOLLO_HEXAGON_VADD_INPUT_WORDS * sizeof(u32) &&
-	       output_bytes == APOLLO_HEXAGON_VADD_OUTPUT_WORDS * sizeof(u32);
+	return apollo_hexagon_cmdq_kind_sizes_valid(entry_kind, input_bytes,
+						    output_bytes);
 }
 
-static bool apollo_hexagon_cmdq_dispatch_uses_loaded_vadd(
+static bool apollo_hexagon_cmdq_dispatch_uses_loaded_exec(
 	const u32 *packet, const struct apollo_hexagon_loaded_exec *loaded)
 {
 	u32 slot;
@@ -178,21 +210,32 @@ static bool apollo_hexagon_cmdq_dispatch_uses_loaded_vadd(
 	slot = packet[1] & ~APOLLO_HEXAGON_CMDQ_DISPATCH_EXEC_SLOT_FLAG;
 	if (slot == 0 || slot > APOLLO_HEXAGON_CMDQ_EXEC_SLOT_MAX)
 		return false;
-	if (!loaded[slot].valid ||
-	    loaded[slot].entry_kind != APOLLO_HEXAGON_EXEC_KIND_VADD)
+	if (!loaded[slot].valid)
 		return false;
 	return packet[6] == loaded[slot].input_bytes &&
 	       packet[7] == loaded[slot].output_bytes;
 }
 
-static bool apollo_hexagon_cmdq_packet_is_vadd_dispatch(
-	const u32 *packet, const struct apollo_hexagon_loaded_exec *loaded)
+static bool apollo_hexagon_cmdq_packet_is_bound_dispatch(
+	const u32 *packet, const struct apollo_hexagon_loaded_exec *loaded,
+	u32 *entry_kind)
 {
+	u32 slot;
+
 	if (packet[0] != APOLLO_HEXAGON_CMDQ_OPCODE_DISPATCH)
 		return false;
-	if (packet[1] == APOLLO_HEXAGON_CMDQ_DISPATCH_KIND_VADD)
+	if (packet[1] == APOLLO_HEXAGON_CMDQ_DISPATCH_KIND_CNN ||
+	    packet[1] == APOLLO_HEXAGON_CMDQ_DISPATCH_KIND_VADD) {
+		*entry_kind = packet[1];
 		return true;
-	return apollo_hexagon_cmdq_dispatch_uses_loaded_vadd(packet, loaded);
+	}
+	if (!apollo_hexagon_cmdq_dispatch_uses_loaded_exec(packet, loaded))
+		return false;
+
+	slot = packet[1] & ~APOLLO_HEXAGON_CMDQ_DISPATCH_EXEC_SLOT_FLAG;
+	*entry_kind = loaded[slot].entry_kind;
+	return *entry_kind == APOLLO_HEXAGON_EXEC_KIND_CNN ||
+	       *entry_kind == APOLLO_HEXAGON_EXEC_KIND_VADD;
 }
 
 static u64 apollo_hexagon_cmdq_packet_iova(u32 lo, u32 hi)
@@ -200,18 +243,20 @@ static u64 apollo_hexagon_cmdq_packet_iova(u32 lo, u32 hi)
 	return ((u64)hi << 32) | lo;
 }
 
-static int apollo_hexagon_prepare_bound_vadd_packet(
+static int apollo_hexagon_prepare_bound_dispatch_packet(
 		struct device *dev, struct apollo_hexagon_context *ctx,
 		u32 *packet, const struct apollo_hexagon_loaded_exec *loaded,
-		struct apollo_hexagon_bound_vadd *bound)
+		struct apollo_hexagon_bound_dispatch *bound)
 {
 	u64 input_iova;
 	u64 output_iova;
+	u32 entry_kind = 0;
 	u32 input_bytes;
 	u32 output_bytes;
 	int ret;
 
-	if (!apollo_hexagon_cmdq_packet_is_vadd_dispatch(packet, loaded))
+	if (!apollo_hexagon_cmdq_packet_is_bound_dispatch(packet, loaded,
+							  &entry_kind))
 		return 0;
 	if (bound->active)
 		return -EINVAL;
@@ -220,8 +265,8 @@ static int apollo_hexagon_prepare_bound_vadd_packet(
 	output_iova = apollo_hexagon_cmdq_packet_iova(packet[4], packet[5]);
 	input_bytes = packet[6];
 	output_bytes = packet[7];
-	if (input_bytes != APOLLO_HEXAGON_VADD_INPUT_WORDS * sizeof(u32) ||
-	    output_bytes != APOLLO_HEXAGON_VADD_OUTPUT_WORDS * sizeof(u32))
+	if (!apollo_hexagon_cmdq_kind_sizes_valid(entry_kind, input_bytes,
+						  output_bytes))
 		return 0;
 
 	ret = apollo_hexagon_context_copy_from_iova(
@@ -242,18 +287,21 @@ static int apollo_hexagon_prepare_bound_vadd_packet(
 
 	bound->active = true;
 	bound->packet = packet;
+	bound->entry_kind = entry_kind;
 	bound->output_iova = output_iova;
+	bound->input_bytes = input_bytes;
 	bound->output_bytes = output_bytes;
 	dev_info(dev,
-		 "command BO bound VADD dispatch ctx=%u input=0x%llx output=0x%llx bytes=%u/%u\n",
-		 ctx->handle, input_iova, output_iova, input_bytes, output_bytes);
+		 "command BO bound %s dispatch ctx=%u input=0x%llx output=0x%llx bytes=%u/%u\n",
+		 apollo_hexagon_exec_kind_name(entry_kind), ctx->handle,
+		 input_iova, output_iova, input_bytes, output_bytes);
 
 	return 0;
 }
 
-static int apollo_hexagon_prepare_bound_vadd(
+static int apollo_hexagon_prepare_bound_dispatch(
 	struct device *dev, struct apollo_hexagon_context *ctx, u32 *command,
-	u32 command_size, struct apollo_hexagon_bound_vadd *bound)
+	u32 command_size, struct apollo_hexagon_bound_dispatch *bound)
 {
 	struct apollo_hexagon_loaded_exec loaded[APOLLO_HEXAGON_CMDQ_EXEC_SLOT_MAX + 1] = { 0 };
 	u32 packet_count = command_size / APOLLO_HEXAGON_CMDQ_PACKET_BYTES;
@@ -279,8 +327,8 @@ static int apollo_hexagon_prepare_bound_vadd(
 			continue;
 		}
 
-		ret = apollo_hexagon_prepare_bound_vadd_packet(dev, ctx, packet,
-							       loaded, bound);
+		ret = apollo_hexagon_prepare_bound_dispatch_packet(
+			dev, ctx, packet, loaded, bound);
 		if (ret)
 			return ret;
 	}
@@ -288,8 +336,9 @@ static int apollo_hexagon_prepare_bound_vadd(
 	return 0;
 }
 
-static void apollo_hexagon_patch_bound_vadd(struct apollo_hexagon *test,
-						    const struct apollo_hexagon_bound_vadd *bound)
+static void
+apollo_hexagon_patch_bound_dispatch(struct apollo_hexagon *test,
+				    const struct apollo_hexagon_bound_dispatch *bound)
 {
 	const u64 shared_input_iova =
 		test->dma_iova_base + APOLLO_HEXAGON_INPUT_OFFSET;
@@ -300,7 +349,7 @@ static void apollo_hexagon_patch_bound_vadd(struct apollo_hexagon *test,
 		return;
 
 	apollo_hexagon_write_guest_words(test, bound->input,
-					 APOLLO_HEXAGON_VADD_INPUT_WORDS);
+					 bound->input_bytes / sizeof(u32));
 	bound->packet[2] = lower_32_bits(shared_input_iova);
 	bound->packet[3] = upper_32_bits(shared_input_iova);
 	bound->packet[4] = lower_32_bits(shared_output_iova);
@@ -308,7 +357,7 @@ static void apollo_hexagon_patch_bound_vadd(struct apollo_hexagon *test,
 }
 
 static void
-apollo_hexagon_bound_vadd_put(struct apollo_hexagon_bound_vadd *bound)
+apollo_hexagon_bound_dispatch_put(struct apollo_hexagon_bound_dispatch *bound)
 {
 	if (bound->output_obj)
 		drm_gem_object_put(bound->output_obj);
@@ -816,9 +865,9 @@ int apollo_hexagon_ioctl_cmd_submit(struct drm_device *drm, void *data,
 	struct apollo_hexagon_file *afile = file->driver_priv;
 	struct drm_apollo_hexagon_cmd_submit *args = data;
 	struct apollo_hexagon_context *ctx;
-	struct apollo_hexagon_bound_vadd bound_vadd;
+	struct apollo_hexagon_bound_dispatch bound_dispatch;
 	u32 command[APOLLO_HEXAGON_CMDQ_SUBMIT_MAX_BYTES / sizeof(u32)] = { 0 };
-	u32 output[APOLLO_HEXAGON_VADD_OUTPUT_WORDS] = { 0 };
+	u32 output[APOLLO_HEXAGON_CNN_OUTPUT_WORDS] = { 0 };
 	const u64 cmdq_iova = test->dma_iova_base + APOLLO_HEXAGON_CMDQ_OFFSET;
 	u32 queue_count;
 	u32 cmdq_status = 0;
@@ -844,22 +893,23 @@ int apollo_hexagon_ioctl_cmd_submit(struct drm_device *drm, void *data,
 	if (ret)
 		return ret;
 
-	memset(&bound_vadd, 0, sizeof(bound_vadd));
+	memset(&bound_dispatch, 0, sizeof(bound_dispatch));
 	mutex_lock(&afile->lock);
 	ctx = xa_load(&afile->contexts, args->context_handle);
 	if (!ctx) {
 		ret = -ENOENT;
 	} else {
-		ret = apollo_hexagon_prepare_bound_vadd(
-			test->dev, ctx, command, args->command_size, &bound_vadd);
+		ret = apollo_hexagon_prepare_bound_dispatch(
+			test->dev, ctx, command, args->command_size,
+			&bound_dispatch);
 	}
 	mutex_unlock(&afile->lock);
 	if (ret)
-		goto out_bound_vadd;
+		goto out_bound_dispatch;
 
 	if (!drm_dev_enter(drm, &idx)) {
 		ret = -ENODEV;
-		goto out_bound_vadd;
+		goto out_bound_dispatch;
 	}
 
 	queue_count = readl(test->regs + APOLLO_HEXAGON_REG_QUEUE_CAPS);
@@ -874,7 +924,7 @@ int apollo_hexagon_ioctl_cmd_submit(struct drm_device *drm, void *data,
 	if (ret)
 		goto out_unlock;
 
-	apollo_hexagon_patch_bound_vadd(test, &bound_vadd);
+	apollo_hexagon_patch_bound_dispatch(test, &bound_dispatch);
 
 	dev_info(test->dev,
 		 "command BO submit start ctx=%u bo=%u queue=%u offset=%llu size=%u opcode=%u\n",
@@ -908,10 +958,10 @@ int apollo_hexagon_ioctl_cmd_submit(struct drm_device *drm, void *data,
 	if (ret)
 		goto out_unlock;
 
-	if (bound_vadd.active) {
+	if (bound_dispatch.active) {
 		dma_rmb();
 		apollo_hexagon_read_guest_words(
-			test, output, APOLLO_HEXAGON_VADD_OUTPUT_WORDS);
+			test, output, bound_dispatch.output_bytes / sizeof(u32));
 	}
 
 	dev_info(test->dev,
@@ -921,20 +971,23 @@ int apollo_hexagon_ioctl_cmd_submit(struct drm_device *drm, void *data,
 
 out_unlock:
 	mutex_unlock(&test->lock);
-	if (!ret && bound_vadd.active) {
-		ret = apollo_hexagon_bo_copy_to(bound_vadd.output_obj,
-						bound_vadd.output_offset,
-						bound_vadd.output_bytes, output);
+	if (!ret && bound_dispatch.active) {
+		ret = apollo_hexagon_bo_copy_to(bound_dispatch.output_obj,
+						bound_dispatch.output_offset,
+						bound_dispatch.output_bytes,
+						output);
 		if (!ret)
 			dev_info(test->dev,
-				 "command BO bound VADD output copied ctx=%u output=0x%llx bytes=%u\n",
-				 args->context_handle, bound_vadd.output_iova,
-				 bound_vadd.output_bytes);
+				 "command BO bound %s output copied ctx=%u output=0x%llx bytes=%u\n",
+				 apollo_hexagon_exec_kind_name(bound_dispatch.entry_kind),
+				 args->context_handle,
+				 bound_dispatch.output_iova,
+				 bound_dispatch.output_bytes);
 	}
 out_dev_exit:
 	drm_dev_exit(idx);
-out_bound_vadd:
-	apollo_hexagon_bound_vadd_put(&bound_vadd);
+out_bound_dispatch:
+	apollo_hexagon_bound_dispatch_put(&bound_dispatch);
 	if (ret == -EIO)
 		apollo_hexagon_record_cmd_fault(afile, args, cmdq_status,
 						cmdq_fault);
