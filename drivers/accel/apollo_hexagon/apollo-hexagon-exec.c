@@ -48,9 +48,11 @@ struct apollo_hexagon_bound_dispatch {
 
 struct apollo_hexagon_loaded_exec {
 	bool valid;
+	bool payload_valid;
 	u32 entry_kind;
 	u32 input_bytes;
 	u32 output_bytes;
+	u32 payload_opcode;
 };
 
 static void apollo_hexagon_write_guest_words(struct apollo_hexagon *test,
@@ -218,6 +220,33 @@ static bool apollo_hexagon_cmdq_load_exec_is_valid(const u32 *packet)
 						    output_bytes);
 }
 
+static bool apollo_hexagon_cmdq_payload_opcode_valid(u32 payload_opcode)
+{
+	return payload_opcode == APOLLO_HEXAGON_EXEC_KIND_CNN ||
+	       payload_opcode == APOLLO_HEXAGON_EXEC_KIND_VADD ||
+	       payload_opcode == APOLLO_HEXAGON_EXEC_KIND_MNIST;
+}
+
+static bool apollo_hexagon_cmdq_load_payload_is_valid(
+	const u32 *packet, const struct apollo_hexagon_loaded_exec *loaded)
+{
+	u32 slot = packet[1];
+	u32 payload_opcode = packet[4];
+
+	if (slot == 0 || slot > APOLLO_HEXAGON_CMDQ_EXEC_SLOT_MAX)
+		return false;
+	if (!loaded[slot].valid)
+		return false;
+	if (packet[2] != APOLLO_HEXAGON_APKO_PAYLOAD_MAGIC ||
+	    packet[3] != APOLLO_HEXAGON_APKO_PAYLOAD_VERSION ||
+	    packet[5] != APOLLO_HEXAGON_APKO_PAYLOAD_DESCRIPTOR_WORDS ||
+	    packet[6] || packet[7])
+		return false;
+	if (!apollo_hexagon_cmdq_payload_opcode_valid(payload_opcode))
+		return false;
+	return payload_opcode == loaded[slot].entry_kind;
+}
+
 static bool apollo_hexagon_cmdq_dispatch_uses_loaded_exec(
 	const u32 *packet, const struct apollo_hexagon_loaded_exec *loaded)
 {
@@ -229,7 +258,7 @@ static bool apollo_hexagon_cmdq_dispatch_uses_loaded_exec(
 	slot = packet[1] & ~APOLLO_HEXAGON_CMDQ_DISPATCH_EXEC_SLOT_FLAG;
 	if (slot == 0 || slot > APOLLO_HEXAGON_CMDQ_EXEC_SLOT_MAX)
 		return false;
-	if (!loaded[slot].valid)
+	if (!loaded[slot].valid || !loaded[slot].payload_valid)
 		return false;
 	return packet[6] == loaded[slot].input_bytes &&
 	       packet[7] == loaded[slot].output_bytes;
@@ -354,12 +383,25 @@ static int apollo_hexagon_prepare_bound_dispatch(
 		    apollo_hexagon_cmdq_load_exec_is_valid(packet)) {
 			slot = packet[1];
 			loaded[slot].valid = true;
+			loaded[slot].payload_valid = false;
 			loaded[slot].entry_kind = packet[5];
 			loaded[slot].input_bytes = packet[6];
 			loaded[slot].output_bytes = packet[7];
+			loaded[slot].payload_opcode = 0;
 			dev_info(dev,
 				 "command BO LOAD_EXECUTABLE slot=%u kind=%u input=%u output=%u\n",
 				 slot, packet[5], packet[6], packet[7]);
+			continue;
+		}
+
+		if (packet[0] == APOLLO_HEXAGON_CMDQ_OPCODE_LOAD_PAYLOAD &&
+		    apollo_hexagon_cmdq_load_payload_is_valid(packet, loaded)) {
+			slot = packet[1];
+			loaded[slot].payload_valid = true;
+			loaded[slot].payload_opcode = packet[4];
+			dev_info(dev,
+				 "command BO LOAD_PAYLOAD slot=%u opcode=%u words=%u\n",
+				 slot, packet[4], packet[5]);
 			continue;
 		}
 
