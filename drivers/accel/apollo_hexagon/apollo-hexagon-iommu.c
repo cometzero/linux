@@ -49,6 +49,19 @@ int apollo_hexagon_tbu_map(struct device *dev, struct apollo_hexagon *test,
 	return apollo_hexagon_tbu_ctrl(dev, test, APOLLO_TBU_MAP_CTRL_ADD);
 }
 
+int apollo_hexagon_tbu_unmap(struct device *dev, struct apollo_hexagon *test,
+			     u64 iova, phys_addr_t pa, u64 size)
+{
+	apollo_tbu_write64(test->tbu_regs, APOLLO_TBU_REG_MAP_IOVA_LO,
+			   APOLLO_TBU_REG_MAP_IOVA_HI, iova);
+	apollo_tbu_write64(test->tbu_regs, APOLLO_TBU_REG_MAP_PA_LO,
+			   APOLLO_TBU_REG_MAP_PA_HI, pa);
+	apollo_tbu_write64(test->tbu_regs, APOLLO_TBU_REG_MAP_SIZE_LO,
+			   APOLLO_TBU_REG_MAP_SIZE_HI, size);
+
+	return apollo_hexagon_tbu_ctrl(dev, test, APOLLO_TBU_MAP_CTRL_REMOVE);
+}
+
 static void apollo_hexagon_release_linux_iommu(void *data)
 {
 	struct apollo_hexagon *test = data;
@@ -170,26 +183,27 @@ err_unmap:
 
 int apollo_hexagon_dynamic_map(struct device *dev, struct apollo_hexagon *test)
 {
+	u64 shared_size = min_t(u64, test->shared_size,
+				APOLLO_HEXAGON_BIND_IOVA_OFFSET);
 	int ret;
 
 	ret = apollo_hexagon_tbu_map(dev, test, test->dma_iova_base,
-				     test->shared_phys, test->dma_window_size);
+				     test->shared_phys, shared_size);
 	if (ret)
 		return ret;
 	ret = apollo_hexagon_tbu_ctrl(dev, test, APOLLO_TBU_MAP_CTRL_REMOVE);
 	if (ret)
 		return ret;
 	ret = apollo_hexagon_tbu_map(dev, test, test->dma_iova_base,
-				     test->shared_phys, test->dma_window_size);
+				     test->shared_phys, shared_size);
 	if (ret)
 		return ret;
 
 	dev_info(dev,
 		 "dynamic SMMU map refreshed linux-iommu=yes iova=0x%llx pa=%pa size=0x%llx count=%u\n",
 		 test->dma_iova_base, &test->shared_phys,
-		 test->dma_window_size,
+		 shared_size,
 		 readl(test->tbu_regs + APOLLO_TBU_REG_MAP_COUNT));
 
 	return 0;
 }
-

@@ -42,17 +42,6 @@ const char *apollo_hexagon_exec_kind_name(u32 entry_kind)
 	}
 }
 
-static void apollo_hexagon_cmdq_write_guest_words(struct apollo_hexagon *test,
-						  const u32 *input, u32 words)
-{
-	u32 i;
-
-	for (i = 0; i < words; i++)
-		writel(input[i],
-		       test->shared_base + APOLLO_HEXAGON_INPUT_OFFSET +
-		       i * sizeof(u32));
-}
-
 static void apollo_hexagon_cmdq_write_packet(struct apollo_hexagon *test,
 					     const u32 *packet)
 {
@@ -277,6 +266,8 @@ static int apollo_hexagon_cmdq_prepare_bound_dispatch_packet(
 	u32 entry_kind = 0;
 	u32 input_bytes;
 	u32 output_bytes;
+	struct drm_gem_object *input_obj;
+	u64 input_offset;
 	int ret;
 
 	if (!apollo_hexagon_cmdq_packet_is_bound_dispatch(packet, loaded,
@@ -293,48 +284,42 @@ static int apollo_hexagon_cmdq_prepare_bound_dispatch_packet(
 						  output_bytes))
 		return 0;
 
-	bound->input = kmalloc(input_bytes, GFP_KERNEL);
-	if (!bound->input)
-		return -ENOMEM;
-
-	ret = apollo_hexagon_context_copy_from_iova(
+	ret = apollo_hexagon_context_get_iova_bo(
 		ctx, input_iova, input_bytes, APOLLO_HEXAGON_BO_BIND_USAGE_READ,
-		bound->input);
-	if (ret == -ENOENT) {
-		kfree(bound->input);
-		bound->input = NULL;
+		&input_obj, &input_offset);
+	if (ret == -ENOENT)
 		return 0;
-	}
 	if (ret)
-		goto out_free_input;
+		return ret;
 
 	ret = apollo_hexagon_context_get_iova_bo(
 		ctx, output_iova, output_bytes, APOLLO_HEXAGON_BO_BIND_USAGE_WRITE,
 		&bound->output_obj, &bound->output_offset);
 	if (ret == -ENOENT) {
-		kfree(bound->input);
-		bound->input = NULL;
+		drm_gem_object_put(input_obj);
 		return 0;
 	}
 	if (ret)
-		goto out_free_input;
+		goto out_put_input;
 
 	bound->active = true;
 	bound->packet = packet;
 	bound->entry_kind = entry_kind;
+	bound->input_obj = input_obj;
+	bound->input_iova = input_iova;
 	bound->output_iova = output_iova;
+	bound->input_offset = input_offset;
 	bound->input_bytes = input_bytes;
 	bound->output_bytes = output_bytes;
 	dev_info(dev,
-		 "command BO bound %s dispatch ctx=%u input=0x%llx output=0x%llx bytes=%u/%u\n",
+		 "command BO bound %s dispatch ctx=%u input=0x%llx output=0x%llx bytes=%u/%u direct-tbu=yes\n",
 		 apollo_hexagon_exec_kind_name(entry_kind), ctx->handle,
 		 input_iova, output_iova, input_bytes, output_bytes);
 
 	return 0;
 
-out_free_input:
-	kfree(bound->input);
-	bound->input = NULL;
+out_put_input:
+	drm_gem_object_put(input_obj);
 	return ret;
 }
 
@@ -409,30 +394,64 @@ int apollo_hexagon_cmdq_prepare_bound_dispatch(
 	return 0;
 }
 
-void apollo_hexagon_cmdq_patch_bound_dispatch(
-	struct apollo_hexagon *test,
-	const struct apollo_hexagon_bound_dispatch *bound)
+int apollo_hexagon_cmdq_map_bound_dispatch(
+	struct device *dev, struct apollo_hexagon *test,
+	struct apollo_hexagon_bound_dispatch *bound)
 {
-	const u64 shared_input_iova =
-		test->dma_iova_base + APOLLO_HEXAGON_INPUT_OFFSET;
-	const u64 shared_output_iova =
-		test->dma_iova_base + APOLLO_HEXAGON_OUTPUT_OFFSET;
+	int ret;
 
+	if (!bound->active)
+		return 0;
+
+	ret = apollo_hexagon_bo_map_tbu(
+		dev, test, bound->input_obj, bound->input_offset,
+		bound->input_iova, bound->input_bytes, DMA_TO_DEVICE,
+		&bound->input_map);
+	if (ret)
+		return ret;
+
+	ret = apollo_hexagon_bo_map_tbu(
+		dev, test, bound->output_obj, bound->output_offset,
+		bound->output_iova, bound->output_bytes, DMA_FROM_DEVICE,
+		&bound->output_map);
+	if (ret) {
+		apollo_hexagon_bo_unmap_tbu(
+			dev, test, &bound->input_map);
+		return ret;
+	}
+
+	dev_info(dev,
+		 "command BO bound %s dispatch uses BO IOVA input=0x%llx output=0x%llx\n",
+		 apollo_hexagon_exec_kind_name(bound->entry_kind),
+		 bound->input_iova, bound->output_iova);
+	return 0;
+}
+
+void apollo_hexagon_cmdq_sync_bound_dispatch_for_cpu(
+	struct device *dev, struct apollo_hexagon_bound_dispatch *bound)
+{
 	if (!bound->active)
 		return;
 
-	apollo_hexagon_cmdq_write_guest_words(test, bound->input,
-					      bound->input_bytes / sizeof(u32));
-	bound->packet[2] = lower_32_bits(shared_input_iova);
-	bound->packet[3] = upper_32_bits(shared_input_iova);
-	bound->packet[4] = lower_32_bits(shared_output_iova);
-	bound->packet[5] = upper_32_bits(shared_output_iova);
+	apollo_hexagon_bo_sync_tbu_for_cpu(dev, &bound->output_map);
+}
+
+void apollo_hexagon_cmdq_unmap_bound_dispatch(
+	struct device *dev, struct apollo_hexagon *test,
+	struct apollo_hexagon_bound_dispatch *bound)
+{
+	if (!bound->active)
+		return;
+
+	apollo_hexagon_bo_unmap_tbu(dev, test, &bound->output_map);
+	apollo_hexagon_bo_unmap_tbu(dev, test, &bound->input_map);
 }
 
 void apollo_hexagon_cmdq_bound_dispatch_put(
 	struct apollo_hexagon_bound_dispatch *bound)
 {
-	kfree(bound->input);
+	if (bound->input_obj)
+		drm_gem_object_put(bound->input_obj);
 	if (bound->output_obj)
 		drm_gem_object_put(bound->output_obj);
 	memset(bound, 0, sizeof(*bound));

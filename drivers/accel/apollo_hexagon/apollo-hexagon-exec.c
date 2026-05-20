@@ -465,7 +465,6 @@ int apollo_hexagon_ioctl_cmd_submit(struct drm_device *drm, void *data,
 	struct apollo_hexagon_context *ctx;
 	struct apollo_hexagon_bound_dispatch bound_dispatch;
 	u32 command[APOLLO_HEXAGON_CMDQ_SUBMIT_MAX_BYTES / sizeof(u32)] = { 0 };
-	u32 output[APOLLO_HEXAGON_MAX_OUTPUT_WORDS] = { 0 };
 	const u64 cmdq_iova = test->dma_iova_base + APOLLO_HEXAGON_CMDQ_OFFSET;
 	u32 queue_count;
 	u32 cmdq_status = 0;
@@ -522,7 +521,10 @@ int apollo_hexagon_ioctl_cmd_submit(struct drm_device *drm, void *data,
 	if (ret)
 		goto out_unlock;
 
-	apollo_hexagon_cmdq_patch_bound_dispatch(test, &bound_dispatch);
+	ret = apollo_hexagon_cmdq_map_bound_dispatch(test->dev, test,
+						     &bound_dispatch);
+	if (ret)
+		goto out_unlock;
 
 	dev_info(test->dev,
 		 "command BO submit start ctx=%u bo=%u queue=%u offset=%llu size=%u opcode=%u\n",
@@ -558,8 +560,8 @@ int apollo_hexagon_ioctl_cmd_submit(struct drm_device *drm, void *data,
 
 	if (bound_dispatch.active) {
 		dma_rmb();
-		apollo_hexagon_read_guest_words(
-			test, output, bound_dispatch.output_bytes / sizeof(u32));
+		apollo_hexagon_cmdq_sync_bound_dispatch_for_cpu(
+			test->dev, &bound_dispatch);
 	}
 
 	dev_info(test->dev,
@@ -568,19 +570,15 @@ int apollo_hexagon_ioctl_cmd_submit(struct drm_device *drm, void *data,
 		 cmdq_head, fence_seq);
 
 out_unlock:
+	apollo_hexagon_cmdq_unmap_bound_dispatch(test->dev, test,
+						 &bound_dispatch);
 	mutex_unlock(&test->lock);
 	if (!ret && bound_dispatch.active) {
-		ret = apollo_hexagon_bo_copy_to(bound_dispatch.output_obj,
-						bound_dispatch.output_offset,
-						bound_dispatch.output_bytes,
-						output);
-		if (!ret)
-			dev_info(test->dev,
-				 "command BO bound %s output copied ctx=%u output=0x%llx bytes=%u\n",
-				 apollo_hexagon_exec_kind_name(bound_dispatch.entry_kind),
-				 args->context_handle,
-				 bound_dispatch.output_iova,
-				 bound_dispatch.output_bytes);
+		dev_info(test->dev,
+			 "command BO bound %s output ready ctx=%u output=0x%llx bytes=%u direct-tbu=yes\n",
+			 apollo_hexagon_exec_kind_name(bound_dispatch.entry_kind),
+			 args->context_handle, bound_dispatch.output_iova,
+			 bound_dispatch.output_bytes);
 	}
 out_dev_exit:
 	drm_dev_exit(idx);

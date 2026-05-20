@@ -5,11 +5,12 @@
 
 #include <linux/err.h>
 #include <linux/errno.h>
-#include <linux/iosys-map.h>
+#include <linux/dma-mapping.h>
 #include <linux/kernel.h>
 #include <linux/limits.h>
 #include <linux/mm.h>
 #include <linux/overflow.h>
+#include <linux/scatterlist.h>
 #include <linux/slab.h>
 #include <linux/sizes.h>
 #include <linux/types.h>
@@ -22,6 +23,8 @@
 #include <drm/drm_vma_manager.h>
 
 #include "apollo-hexagon.h"
+
+#define APOLLO_HEXAGON_TBU_MAX_DYNAMIC_MAPS 64
 
 int apollo_hexagon_ioctl_bo_create(struct drm_device *drm, void *data,
 				   struct drm_file *file)
@@ -129,63 +132,6 @@ bool apollo_hexagon_context_iova_bound(struct apollo_hexagon_context *ctx,
 						       required_usage, NULL);
 }
 
-static int apollo_hexagon_context_copy_iova(struct apollo_hexagon_context *ctx,
-					    u64 iova, u32 bytes,
-					    u32 required_usage, void *dst,
-					    const void *src)
-{
-	struct apollo_hexagon_bo_binding *binding;
-	struct iosys_map map;
-	u64 binding_offset = 0;
-	u64 map_offset;
-	int ret;
-
-	binding = apollo_hexagon_context_find_iova_binding(
-		ctx, iova, bytes, required_usage, &binding_offset);
-	if (!binding)
-		return -ENOENT;
-
-	if (check_add_overflow(binding->offset, binding_offset, &map_offset))
-		return -EINVAL;
-	if (map_offset > (u64)binding->obj->size ||
-	    bytes > (u64)binding->obj->size - map_offset)
-		return -EINVAL;
-
-	ret = drm_gem_vmap(binding->obj, &map);
-	if (ret)
-		return ret;
-
-	if (dst)
-		iosys_map_memcpy_from(dst, &map, map_offset, bytes);
-	else
-		iosys_map_memcpy_to(&map, map_offset, src, bytes);
-	drm_gem_vunmap(binding->obj, &map);
-
-	return 0;
-}
-
-int apollo_hexagon_context_copy_from_iova(struct apollo_hexagon_context *ctx,
-					  u64 iova, u32 bytes,
-					  u32 required_usage, void *dst)
-{
-	if (!dst)
-		return -EINVAL;
-
-	return apollo_hexagon_context_copy_iova(ctx, iova, bytes,
-						required_usage, dst, NULL);
-}
-
-int apollo_hexagon_context_copy_to_iova(struct apollo_hexagon_context *ctx,
-					u64 iova, u32 bytes,
-					u32 required_usage, const void *src)
-{
-	if (!src)
-		return -EINVAL;
-
-	return apollo_hexagon_context_copy_iova(ctx, iova, bytes,
-						required_usage, NULL, src);
-}
-
 int apollo_hexagon_context_get_iova_bo(struct apollo_hexagon_context *ctx,
 				       u64 iova, u32 bytes,
 				       u32 required_usage,
@@ -218,24 +164,196 @@ int apollo_hexagon_context_get_iova_bo(struct apollo_hexagon_context *ctx,
 	return 0;
 }
 
-int apollo_hexagon_bo_copy_to(struct drm_gem_object *obj, u64 offset,
-			      u32 bytes, const void *src)
+static int apollo_hexagon_bo_tbu_map_count(struct sg_table *sgt,
+					   u64 obj_offset, u64 bytes,
+					   u32 *count)
 {
-	struct iosys_map map;
+	struct scatterlist *sg;
+	u64 skip = obj_offset;
+	u64 remaining = bytes;
+	unsigned int i;
+	u32 segments = 0;
+
+	if (!sgt || !bytes || !count)
+		return -EINVAL;
+
+	for_each_sgtable_sg(sgt, sg, i) {
+		u64 sg_len = sg->length;
+		u64 len;
+
+		if (skip >= sg_len) {
+			skip -= sg_len;
+			continue;
+		}
+
+		len = min_t(u64, sg_len - skip, remaining);
+		if (!len)
+			break;
+
+		if (++segments > APOLLO_HEXAGON_TBU_MAX_DYNAMIC_MAPS)
+			return -ENOSPC;
+
+		remaining -= len;
+		skip = 0;
+		if (!remaining)
+			break;
+	}
+	if (remaining)
+		return -EINVAL;
+
+	*count = segments;
+	return 0;
+}
+
+static void apollo_hexagon_bo_unmap_tbu_entries(
+	struct device *dev, struct apollo_hexagon *test,
+	struct apollo_hexagon_tbu_mapping *maps, u32 map_count)
+{
+	u32 i;
+
+	for (i = map_count; i > 0; i--) {
+		struct apollo_hexagon_tbu_mapping *map = &maps[i - 1];
+		int ret;
+
+		ret = apollo_hexagon_tbu_unmap(dev, test, map->iova,
+					       map->pa, map->size);
+		if (ret)
+			dev_warn(dev,
+				 "failed to unmap BO TBU entry iova=0x%llx pa=%pa size=0x%llx ret=%d\n",
+				 map->iova, &map->pa, map->size, ret);
+	}
+}
+
+int apollo_hexagon_bo_map_tbu(struct device *dev,
+			      struct apollo_hexagon *test,
+			      struct drm_gem_object *obj, u64 obj_offset,
+			      u64 iova, u32 bytes,
+			      enum dma_data_direction dir,
+			      struct apollo_hexagon_bo_tbu_map *map)
+{
+	struct drm_gem_shmem_object *shmem;
+	struct apollo_hexagon_tbu_mapping *maps;
+	struct scatterlist *sg;
+	struct sg_table *sgt;
+	u64 map_offset;
+	u64 map_iova;
+	u64 map_bytes;
+	u64 range_bias;
+	u64 skip;
+	u64 mapped = 0;
+	u64 remaining;
+	unsigned int i;
+	u32 map_count = 0;
+	u32 installed = 0;
 	int ret;
 
-	if (!obj || !src || !bytes)
+	if (!dev || !test || !obj || !bytes || !map)
 		return -EINVAL;
-	if (offset > (u64)obj->size || bytes > (u64)obj->size - offset)
+	if (obj_offset > (u64)obj->size || bytes > (u64)obj->size - obj_offset)
 		return -EINVAL;
 
-	ret = drm_gem_vmap(obj, &map);
+	map_offset = round_down(obj_offset, (u64)PAGE_SIZE);
+	map_iova = round_down(iova, (u64)PAGE_SIZE);
+	range_bias = obj_offset - map_offset;
+	if (iova - map_iova != range_bias)
+		return -EINVAL;
+	if (check_add_overflow(range_bias, (u64)bytes, &map_bytes))
+		return -EOVERFLOW;
+	map_bytes = ALIGN(map_bytes, (u64)PAGE_SIZE);
+	if (map_offset > (u64)obj->size ||
+	    map_bytes > (u64)obj->size - map_offset)
+		return -EINVAL;
+
+	shmem = to_drm_gem_shmem_obj(obj);
+	sgt = drm_gem_shmem_get_pages_sgt(shmem);
+	if (IS_ERR(sgt))
+		return PTR_ERR(sgt);
+
+	ret = apollo_hexagon_bo_tbu_map_count(sgt, map_offset, map_bytes,
+					      &map_count);
 	if (ret)
 		return ret;
 
-	iosys_map_memcpy_to(&map, offset, src, bytes);
-	drm_gem_vunmap(obj, &map);
+	maps = kcalloc(map_count, sizeof(*maps), GFP_KERNEL);
+	if (!maps)
+		return -ENOMEM;
+
+	dma_sync_sgtable_for_device(dev, sgt, dir);
+
+	skip = map_offset;
+	remaining = map_bytes;
+	for_each_sgtable_sg(sgt, sg, i) {
+		u64 sg_len = sg->length;
+		u64 phys = sg_phys(sg);
+		u64 len;
+
+		if (skip >= sg_len) {
+			skip -= sg_len;
+			continue;
+		}
+
+		if (check_add_overflow(phys, skip, &phys)) {
+			ret = -EOVERFLOW;
+			goto err_unmap;
+		}
+
+		len = min_t(u64, sg_len - skip, remaining);
+		ret = apollo_hexagon_tbu_map(dev, test, map_iova + mapped,
+					     (phys_addr_t)phys, len);
+		if (ret)
+			goto err_unmap;
+
+		maps[installed].iova = map_iova + mapped;
+		maps[installed].pa = (phys_addr_t)phys;
+		maps[installed].size = len;
+		installed++;
+		mapped += len;
+		remaining -= len;
+		skip = 0;
+		if (!remaining)
+			break;
+	}
+	if (remaining) {
+		ret = -EINVAL;
+		goto err_unmap;
+	}
+
+	map->sgt = sgt;
+	map->maps = maps;
+	map->map_count = installed;
+	map->dir = dir;
+	dev_info(dev,
+		 "command BO TBU map iova=0x%llx object-offset=0x%llx bytes=%u mapped-bytes=0x%llx segments=%u\n",
+		 iova, obj_offset, bytes, map_bytes, installed);
+
 	return 0;
+
+err_unmap:
+	apollo_hexagon_bo_unmap_tbu_entries(dev, test, maps, installed);
+	kfree(maps);
+	return ret;
+}
+
+void apollo_hexagon_bo_sync_tbu_for_cpu(
+	struct device *dev, struct apollo_hexagon_bo_tbu_map *map)
+{
+	if (!map || !map->sgt)
+		return;
+
+	dma_sync_sgtable_for_cpu(dev, map->sgt, map->dir);
+}
+
+void apollo_hexagon_bo_unmap_tbu(struct device *dev,
+				 struct apollo_hexagon *test,
+				 struct apollo_hexagon_bo_tbu_map *map)
+{
+	if (!map || !map->maps)
+		return;
+
+	apollo_hexagon_bo_unmap_tbu_entries(dev, test, map->maps,
+					    map->map_count);
+	kfree(map->maps);
+	memset(map, 0, sizeof(*map));
 }
 
 int apollo_hexagon_ioctl_bo_bind(struct drm_device *drm, void *data,
