@@ -132,13 +132,13 @@ out_put:
 	return ret;
 }
 
-static void apollo_hexagon_write_cmdq_dispatch_vadd(
-	struct apollo_hexagon *test, u64 input_iova, u64 output_iova,
-	u32 input_bytes, u32 output_bytes)
+static void apollo_hexagon_write_cmdq_dispatch_packet(
+	struct apollo_hexagon *test, u32 entry_kind, u64 input_iova,
+	u64 output_iova, u32 input_bytes, u32 output_bytes)
 {
 	u32 packet[APOLLO_HEXAGON_CMDQ_PACKET_WORDS] = {
 		APOLLO_HEXAGON_CMDQ_OPCODE_DISPATCH,
-		APOLLO_HEXAGON_CMDQ_DISPATCH_KIND_VADD,
+		entry_kind,
 		lower_32_bits(input_iova),
 		upper_32_bits(input_iova),
 		lower_32_bits(output_iova),
@@ -150,6 +150,15 @@ static void apollo_hexagon_write_cmdq_dispatch_vadd(
 	apollo_hexagon_write_cmdq_packet(test, packet);
 }
 
+static void apollo_hexagon_write_cmdq_dispatch_vadd(
+	struct apollo_hexagon *test, u64 input_iova, u64 output_iova,
+	u32 input_bytes, u32 output_bytes)
+{
+	apollo_hexagon_write_cmdq_dispatch_packet(
+		test, APOLLO_HEXAGON_CMDQ_DISPATCH_KIND_VADD, input_iova,
+		output_iova, input_bytes, output_bytes);
+}
+
 static const char *apollo_hexagon_exec_kind_name(u32 entry_kind)
 {
 	switch (entry_kind) {
@@ -157,6 +166,8 @@ static const char *apollo_hexagon_exec_kind_name(u32 entry_kind)
 		return "CNN";
 	case APOLLO_HEXAGON_EXEC_KIND_VADD:
 		return "VADD";
+	case APOLLO_HEXAGON_EXEC_KIND_MNIST:
+		return "MNIST";
 	default:
 		return "unknown";
 	}
@@ -175,8 +186,13 @@ static bool apollo_hexagon_cmdq_kind_sizes_valid(u32 entry_kind,
 	case APOLLO_HEXAGON_EXEC_KIND_VADD:
 		return input_bytes ==
 			       APOLLO_HEXAGON_VADD_INPUT_WORDS * sizeof(u32) &&
-		       output_bytes ==
+			       output_bytes ==
 			       APOLLO_HEXAGON_VADD_OUTPUT_WORDS * sizeof(u32);
+	case APOLLO_HEXAGON_EXEC_KIND_MNIST:
+		return input_bytes ==
+			       APOLLO_HEXAGON_MNIST_INPUT_WORDS * sizeof(u32) &&
+			       output_bytes ==
+			       APOLLO_HEXAGON_MNIST_OUTPUT_WORDS * sizeof(u32);
 	default:
 		return false;
 	}
@@ -225,7 +241,8 @@ static bool apollo_hexagon_cmdq_packet_is_bound_dispatch(
 	if (packet[0] != APOLLO_HEXAGON_CMDQ_OPCODE_DISPATCH)
 		return false;
 	if (packet[1] == APOLLO_HEXAGON_CMDQ_DISPATCH_KIND_CNN ||
-	    packet[1] == APOLLO_HEXAGON_CMDQ_DISPATCH_KIND_VADD) {
+	    packet[1] == APOLLO_HEXAGON_CMDQ_DISPATCH_KIND_VADD ||
+	    packet[1] == APOLLO_HEXAGON_CMDQ_DISPATCH_KIND_MNIST) {
 		*entry_kind = packet[1];
 		return true;
 	}
@@ -235,7 +252,8 @@ static bool apollo_hexagon_cmdq_packet_is_bound_dispatch(
 	slot = packet[1] & ~APOLLO_HEXAGON_CMDQ_DISPATCH_EXEC_SLOT_FLAG;
 	*entry_kind = loaded[slot].entry_kind;
 	return *entry_kind == APOLLO_HEXAGON_EXEC_KIND_CNN ||
-	       *entry_kind == APOLLO_HEXAGON_EXEC_KIND_VADD;
+	       *entry_kind == APOLLO_HEXAGON_EXEC_KIND_VADD ||
+	       *entry_kind == APOLLO_HEXAGON_EXEC_KIND_MNIST;
 }
 
 static u64 apollo_hexagon_cmdq_packet_iova(u32 lo, u32 hi)
@@ -398,7 +416,8 @@ static int apollo_hexagon_submit_executable(
 	const u64 cmdq_iova = test->dma_iova_base + APOLLO_HEXAGON_CMDQ_OFFSET;
 	u32 input[APOLLO_HEXAGON_CNN_INPUT_WORDS] = { 0 };
 	u32 output[APOLLO_HEXAGON_CNN_OUTPUT_WORDS] = { 0 };
-	bool use_cmdq_vadd = exe->entry_kind == APOLLO_HEXAGON_EXEC_KIND_VADD;
+	bool use_cmdq_dispatch = exe->entry_kind == APOLLO_HEXAGON_EXEC_KIND_VADD ||
+				 exe->entry_kind == APOLLO_HEXAGON_EXEC_KIND_MNIST;
 	u32 input_words;
 	u32 output_words;
 	u32 cmdq_status;
@@ -428,14 +447,19 @@ static int apollo_hexagon_submit_executable(
 		goto out_unlock;
 
 	apollo_hexagon_write_guest_words(test, input, input_words);
-	if (use_cmdq_vadd) {
+	if (use_cmdq_dispatch) {
 		dev_info(dev,
 			 "APKO CMDQ dispatch start handle=%u kind=%u queue=%u input=%u output=%u\n",
 			 exe->handle, exe->entry_kind, queue_id,
 			 exe->input_bytes, exe->output_bytes);
-		apollo_hexagon_write_cmdq_dispatch_vadd(
-			test, input_iova, output_iova, exe->input_bytes,
-			exe->output_bytes);
+		if (exe->entry_kind == APOLLO_HEXAGON_EXEC_KIND_VADD)
+			apollo_hexagon_write_cmdq_dispatch_vadd(
+				test, input_iova, output_iova, exe->input_bytes,
+				exe->output_bytes);
+		else
+			apollo_hexagon_write_cmdq_dispatch_packet(
+				test, exe->entry_kind, input_iova, output_iova,
+				exe->input_bytes, exe->output_bytes);
 		dma_wmb();
 		writel(lower_32_bits(cmdq_iova),
 		       test->regs + APOLLO_HEXAGON_REG_CMDQ_BASE_LO);
@@ -487,7 +511,7 @@ static int apollo_hexagon_submit_executable(
 		goto out_unlock;
 	}
 
-	if (use_cmdq_vadd) {
+	if (use_cmdq_dispatch) {
 		cmdq_status = readl(test->regs + APOLLO_HEXAGON_REG_CMDQ_STATUS);
 		cmdq_fault = readl(test->regs +
 				   APOLLO_HEXAGON_REG_CMDQ_FAULT_CODE);
@@ -653,6 +677,15 @@ static int apollo_hexagon_validate_apko_header(
 			return -EINVAL;
 		exe->queue_id = APOLLO_HEXAGON_QUEUE_VADD;
 		exe->expected_result = APOLLO_HEXAGON_JOB_RESULT_VADD_OK;
+		break;
+	case APOLLO_HEXAGON_EXEC_KIND_MNIST:
+		if (header->input_bytes !=
+		    APOLLO_HEXAGON_MNIST_INPUT_WORDS * sizeof(u32) ||
+		    header->output_bytes !=
+		    APOLLO_HEXAGON_MNIST_OUTPUT_WORDS * sizeof(u32))
+			return -EINVAL;
+		exe->queue_id = APOLLO_HEXAGON_QUEUE_CNN;
+		exe->expected_result = APOLLO_HEXAGON_JOB_RESULT_MNIST_OK;
 		break;
 	default:
 		return -EINVAL;
