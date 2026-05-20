@@ -5,6 +5,7 @@
 #include <linux/atomic.h>
 #include <linux/bits.h>
 #include <linux/completion.h>
+#include <linux/container_of.h>
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
 #include <linux/io.h>
@@ -12,9 +13,37 @@
 #include <linux/kconfig.h>
 #include <linux/mutex.h>
 #include <linux/types.h>
+#include <linux/xarray.h>
 
 #include <drm/apollo_hexagon_accel.h>
 #include <drm/drm_drv.h>
+
+struct drm_file;
+
+struct apollo_hexagon_file {
+	struct xarray contexts;
+	struct xarray executables;
+	struct drm_apollo_hexagon_fault last_fault;
+	struct mutex lock;
+	bool has_fault;
+};
+
+struct apollo_hexagon_context {
+	struct xarray bindings;
+	u32 handle;
+	u32 generic_abi_version;
+	u64 next_iova_offset;
+};
+
+struct apollo_hexagon_bo_binding {
+	struct drm_gem_object *obj;
+	u64 iova;
+	u64 offset;
+	u64 length;
+	u32 handle;
+	u32 bo_handle;
+	u32 usage;
+};
 
 #define APOLLO_HEXAGON_ACCEL_TIMEOUT_MS		2000
 #define APOLLO_HEXAGON_ACCEL_POLL_MS		10
@@ -33,6 +62,17 @@
 #define APOLLO_HEXAGON_REG_IRQ_STATUS		0x64
 #define APOLLO_HEXAGON_REG_IRQ_ACK		0x68
 #define APOLLO_HEXAGON_REG_QUEUE_CAPS		0x6c
+#define APOLLO_HEXAGON_REG_CMDQ_BASE_LO		0x80
+#define APOLLO_HEXAGON_REG_CMDQ_BASE_HI		0x84
+#define APOLLO_HEXAGON_REG_CMDQ_SIZE		0x88
+#define APOLLO_HEXAGON_REG_CMDQ_HEAD		0x8c
+#define APOLLO_HEXAGON_REG_CMDQ_TAIL		0x90
+#define APOLLO_HEXAGON_REG_CMDQ_DOORBELL	0x94
+#define APOLLO_HEXAGON_REG_CMDQ_STATUS		0x98
+#define APOLLO_HEXAGON_REG_CMDQ_FENCE_VALUE	0x9c
+#define APOLLO_HEXAGON_REG_CMDQ_FAULT_CODE	0xa0
+#define APOLLO_HEXAGON_REG_CMDQ_FAULT_ADDR_LO	0xa4
+#define APOLLO_HEXAGON_REG_CMDQ_FAULT_ADDR_HI	0xa8
 #define APOLLO_HEXAGON_CAP_COPY_ENGINE		BIT(0)
 #define APOLLO_HEXAGON_CAP_DIRECT_TLM		BIT(1)
 #define APOLLO_HEXAGON_CAP_SMMU_TRANSLATED	BIT(2)
@@ -52,9 +92,12 @@
 #define APOLLO_HEXAGON_JOB_RESULT_SG_OK		0x53474f4b
 #define APOLLO_HEXAGON_INPUT_OFFSET		0x10000
 #define APOLLO_HEXAGON_OUTPUT_OFFSET		0x11000
+#define APOLLO_HEXAGON_CMDQ_OFFSET		0x12000
+#define APOLLO_HEXAGON_CMDQ_SIZE		0x1000
 #define APOLLO_HEXAGON_STRESS_INPUT_BASE	0x20000
 #define APOLLO_HEXAGON_STRESS_OUTPUT_BASE	0x80000
 #define APOLLO_HEXAGON_STRESS_SEGMENT_STRIDE	0x8000
+#define APOLLO_HEXAGON_BIND_IOVA_OFFSET		0x300000
 #define APOLLO_HEXAGON_TBU_REG_OFFSET		0x1000
 #define APOLLO_TBU_REG_MAP_IOVA_LO		0x00
 #define APOLLO_TBU_REG_MAP_IOVA_HI		0x04
@@ -93,11 +136,74 @@ struct apollo_hexagon {
 	struct mutex lock;
 };
 
+static inline struct apollo_hexagon *to_apollo_hexagon(struct drm_device *drm)
+{
+	return container_of(drm, struct apollo_hexagon, drm);
+}
+
 void apollo_tbu_write64(void __iomem *base, u32 lo, u32 hi, u64 value);
 int apollo_hexagon_tbu_ctrl(struct device *dev, struct apollo_hexagon *test,
 			    u32 ctrl);
 int apollo_hexagon_tbu_map(struct device *dev, struct apollo_hexagon *test,
 			   u64 iova, phys_addr_t pa, u64 size);
+void apollo_hexagon_prepare_async_fence(struct apollo_hexagon *test,
+					u32 queue_id);
+int apollo_hexagon_dynamic_map(struct device *dev,
+			       struct apollo_hexagon *test);
+int apollo_hexagon_wait_job(struct device *dev, struct apollo_hexagon *test,
+			    u32 queue_id, u32 expected_result,
+			    u32 *fence_seq, u32 *final_status,
+			    u32 *final_result);
+int apollo_hexagon_file_open(struct drm_device *dev, struct drm_file *file);
+void apollo_hexagon_file_postclose(struct drm_device *dev,
+				   struct drm_file *file);
+void apollo_hexagon_context_free(struct apollo_hexagon_context *ctx);
+bool apollo_hexagon_context_iova_bound(struct apollo_hexagon_context *ctx,
+				       u64 iova, u32 bytes,
+				       u32 required_usage);
+int apollo_hexagon_context_copy_from_iova(struct apollo_hexagon_context *ctx,
+					  u64 iova, u32 bytes,
+					  u32 required_usage, void *dst);
+int apollo_hexagon_context_copy_to_iova(struct apollo_hexagon_context *ctx,
+					u64 iova, u32 bytes,
+					u32 required_usage, const void *src);
+int apollo_hexagon_context_get_iova_bo(struct apollo_hexagon_context *ctx,
+				       u64 iova, u32 bytes,
+				       u32 required_usage,
+				       struct drm_gem_object **obj,
+				       u64 *obj_offset);
+int apollo_hexagon_bo_copy_to(struct drm_gem_object *obj, u64 offset,
+			      u32 bytes, const void *src);
+int apollo_hexagon_ioctl_submit_cnn(struct drm_device *drm, void *data,
+				    struct drm_file *file);
+int apollo_hexagon_ioctl_submit_vadd(struct drm_device *drm, void *data,
+				     struct drm_file *file);
+int apollo_hexagon_ioctl_dma_stress(struct drm_device *drm, void *data,
+				    struct drm_file *file);
+int apollo_hexagon_ioctl_exec_create(struct drm_device *drm, void *data,
+				     struct drm_file *file);
+int apollo_hexagon_ioctl_exec_destroy(struct drm_device *drm, void *data,
+				      struct drm_file *file);
+int apollo_hexagon_ioctl_context_create(struct drm_device *drm, void *data,
+					struct drm_file *file);
+int apollo_hexagon_ioctl_context_destroy(struct drm_device *drm, void *data,
+					 struct drm_file *file);
+int apollo_hexagon_ioctl_bo_create(struct drm_device *drm, void *data,
+				   struct drm_file *file);
+int apollo_hexagon_ioctl_bo_destroy(struct drm_device *drm, void *data,
+				    struct drm_file *file);
+int apollo_hexagon_ioctl_bo_bind(struct drm_device *drm, void *data,
+				 struct drm_file *file);
+int apollo_hexagon_ioctl_bo_unbind(struct drm_device *drm, void *data,
+				   struct drm_file *file);
+int apollo_hexagon_ioctl_submit(struct drm_device *drm, void *data,
+				struct drm_file *file);
+int apollo_hexagon_ioctl_cmd_submit(struct drm_device *drm, void *data,
+				    struct drm_file *file);
+int apollo_hexagon_ioctl_get_fault(struct drm_device *drm, void *data,
+				   struct drm_file *file);
+int apollo_hexagon_ioctl_wait(struct drm_device *drm, void *data,
+			      struct drm_file *file);
 
 #if IS_ENABLED(CONFIG_DRM_ACCEL_APOLLO_HEXAGON_SELFTEST)
 int apollo_hexagon_run_selftests(struct device *dev,

@@ -1,0 +1,985 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Apollo Hexagon executable-handle and generic-submit ioctls.
+ */
+
+#include <linux/delay.h>
+#include <linux/device.h>
+#include <linux/dma-mapping.h>
+#include <linux/errno.h>
+#include <linux/io.h>
+#include <linux/iosys-map.h>
+#include <linux/jiffies.h>
+#include <linux/kernel.h>
+#include <linux/mutex.h>
+#include <linux/slab.h>
+#include <linux/uaccess.h>
+#include <linux/xarray.h>
+
+#include <drm/drm_drv.h>
+#include <drm/drm_file.h>
+#include <drm/drm_gem.h>
+
+#include "apollo-hexagon.h"
+
+struct apollo_hexagon_executable {
+	u32 handle;
+	u32 entry_kind;
+	u32 input_bytes;
+	u32 output_bytes;
+	u32 queue_id;
+	u32 expected_result;
+};
+
+struct apollo_hexagon_bound_vadd {
+	bool active;
+	u32 *packet;
+	struct drm_gem_object *output_obj;
+	u64 output_iova;
+	u64 output_offset;
+	u32 output_bytes;
+	u32 input[APOLLO_HEXAGON_VADD_INPUT_WORDS];
+};
+
+struct apollo_hexagon_loaded_exec {
+	bool valid;
+	u32 entry_kind;
+	u32 input_bytes;
+	u32 output_bytes;
+};
+
+static void apollo_hexagon_write_guest_words(struct apollo_hexagon *test,
+					     const u32 *input, u32 words)
+{
+	u32 i;
+
+	for (i = 0; i < words; i++)
+		writel(input[i],
+		       test->shared_base + APOLLO_HEXAGON_INPUT_OFFSET +
+		       i * sizeof(u32));
+}
+
+static void apollo_hexagon_read_guest_words(struct apollo_hexagon *test,
+					    u32 *output, u32 words)
+{
+	u32 i;
+
+	for (i = 0; i < words; i++)
+		output[i] =
+			readl(test->shared_base + APOLLO_HEXAGON_OUTPUT_OFFSET +
+			      i * sizeof(u32));
+}
+
+static void apollo_hexagon_write_cmdq_packet(struct apollo_hexagon *test,
+					     const u32 *packet)
+{
+	u32 i;
+
+	for (i = 0; i < APOLLO_HEXAGON_CMDQ_PACKET_WORDS; i++)
+		writel(packet[i],
+		       test->shared_base + APOLLO_HEXAGON_CMDQ_OFFSET +
+		       i * sizeof(u32));
+}
+
+static void apollo_hexagon_write_cmdq_buffer(struct apollo_hexagon *test,
+					     const u32 *command, u32 bytes)
+{
+	u32 words = bytes / sizeof(u32);
+	u32 i;
+
+	for (i = 0; i < words; i++)
+		writel(command[i],
+		       test->shared_base + APOLLO_HEXAGON_CMDQ_OFFSET +
+		       i * sizeof(u32));
+}
+
+static int apollo_hexagon_copy_cmd_buffer_from_bo(struct drm_file *file,
+							  u32 bo_handle,
+							  u64 command_offset,
+							  u32 command_size,
+							  u32 *command)
+{
+	struct drm_gem_object *obj;
+	struct iosys_map map;
+	int ret;
+
+	if (!bo_handle || !command_size ||
+	    command_size > APOLLO_HEXAGON_CMDQ_SUBMIT_MAX_BYTES ||
+	    command_size % APOLLO_HEXAGON_CMDQ_PACKET_BYTES ||
+	    !IS_ALIGNED(command_offset, sizeof(u32)))
+		return -EINVAL;
+
+	obj = drm_gem_object_lookup(file, bo_handle);
+	if (!obj)
+		return -ENOENT;
+	if (command_offset > (u64)obj->size ||
+	    command_size > (u64)obj->size - command_offset) {
+		ret = -EINVAL;
+		goto out_put;
+	}
+
+	ret = drm_gem_vmap(obj, &map);
+	if (ret)
+		goto out_put;
+
+	iosys_map_memcpy_from(command, &map, command_offset, command_size);
+	drm_gem_vunmap(obj, &map);
+
+out_put:
+	drm_gem_object_put(obj);
+	return ret;
+}
+
+static void apollo_hexagon_write_cmdq_dispatch_vadd(
+	struct apollo_hexagon *test, u64 input_iova, u64 output_iova,
+	u32 input_bytes, u32 output_bytes)
+{
+	u32 packet[APOLLO_HEXAGON_CMDQ_PACKET_WORDS] = {
+		APOLLO_HEXAGON_CMDQ_OPCODE_DISPATCH,
+		APOLLO_HEXAGON_CMDQ_DISPATCH_KIND_VADD,
+		lower_32_bits(input_iova),
+		upper_32_bits(input_iova),
+		lower_32_bits(output_iova),
+		upper_32_bits(output_iova),
+		input_bytes,
+		output_bytes,
+	};
+
+	apollo_hexagon_write_cmdq_packet(test, packet);
+}
+
+static bool apollo_hexagon_cmdq_load_exec_is_valid(const u32 *packet)
+{
+	u32 slot = packet[1];
+	u32 entry_kind = packet[5];
+	u32 input_bytes = packet[6];
+	u32 output_bytes = packet[7];
+
+	if (slot == 0 || slot > APOLLO_HEXAGON_CMDQ_EXEC_SLOT_MAX)
+		return false;
+	if (packet[2] != APOLLO_HEXAGON_APKO_MAGIC ||
+	    packet[3] != APOLLO_HEXAGON_APKO_ABI_VERSION ||
+	    packet[4] != APOLLO_HEXAGON_EXEC_FORMAT_APKO_V0)
+		return false;
+	if (entry_kind != APOLLO_HEXAGON_EXEC_KIND_VADD)
+		return false;
+	return input_bytes == APOLLO_HEXAGON_VADD_INPUT_WORDS * sizeof(u32) &&
+	       output_bytes == APOLLO_HEXAGON_VADD_OUTPUT_WORDS * sizeof(u32);
+}
+
+static bool apollo_hexagon_cmdq_dispatch_uses_loaded_vadd(
+	const u32 *packet, const struct apollo_hexagon_loaded_exec *loaded)
+{
+	u32 slot;
+
+	if (!(packet[1] & APOLLO_HEXAGON_CMDQ_DISPATCH_EXEC_SLOT_FLAG))
+		return false;
+
+	slot = packet[1] & ~APOLLO_HEXAGON_CMDQ_DISPATCH_EXEC_SLOT_FLAG;
+	if (slot == 0 || slot > APOLLO_HEXAGON_CMDQ_EXEC_SLOT_MAX)
+		return false;
+	if (!loaded[slot].valid ||
+	    loaded[slot].entry_kind != APOLLO_HEXAGON_EXEC_KIND_VADD)
+		return false;
+	return packet[6] == loaded[slot].input_bytes &&
+	       packet[7] == loaded[slot].output_bytes;
+}
+
+static bool apollo_hexagon_cmdq_packet_is_vadd_dispatch(
+	const u32 *packet, const struct apollo_hexagon_loaded_exec *loaded)
+{
+	if (packet[0] != APOLLO_HEXAGON_CMDQ_OPCODE_DISPATCH)
+		return false;
+	if (packet[1] == APOLLO_HEXAGON_CMDQ_DISPATCH_KIND_VADD)
+		return true;
+	return apollo_hexagon_cmdq_dispatch_uses_loaded_vadd(packet, loaded);
+}
+
+static u64 apollo_hexagon_cmdq_packet_iova(u32 lo, u32 hi)
+{
+	return ((u64)hi << 32) | lo;
+}
+
+static int apollo_hexagon_prepare_bound_vadd_packet(
+		struct device *dev, struct apollo_hexagon_context *ctx,
+		u32 *packet, const struct apollo_hexagon_loaded_exec *loaded,
+		struct apollo_hexagon_bound_vadd *bound)
+{
+	u64 input_iova;
+	u64 output_iova;
+	u32 input_bytes;
+	u32 output_bytes;
+	int ret;
+
+	if (!apollo_hexagon_cmdq_packet_is_vadd_dispatch(packet, loaded))
+		return 0;
+	if (bound->active)
+		return -EINVAL;
+
+	input_iova = apollo_hexagon_cmdq_packet_iova(packet[2], packet[3]);
+	output_iova = apollo_hexagon_cmdq_packet_iova(packet[4], packet[5]);
+	input_bytes = packet[6];
+	output_bytes = packet[7];
+	if (input_bytes != APOLLO_HEXAGON_VADD_INPUT_WORDS * sizeof(u32) ||
+	    output_bytes != APOLLO_HEXAGON_VADD_OUTPUT_WORDS * sizeof(u32))
+		return 0;
+
+	ret = apollo_hexagon_context_copy_from_iova(
+		ctx, input_iova, input_bytes, APOLLO_HEXAGON_BO_BIND_USAGE_READ,
+		bound->input);
+	if (ret == -ENOENT)
+		return 0;
+	if (ret)
+		return ret;
+
+	ret = apollo_hexagon_context_get_iova_bo(
+		ctx, output_iova, output_bytes, APOLLO_HEXAGON_BO_BIND_USAGE_WRITE,
+		&bound->output_obj, &bound->output_offset);
+	if (ret == -ENOENT)
+		return 0;
+	if (ret)
+		return ret;
+
+	bound->active = true;
+	bound->packet = packet;
+	bound->output_iova = output_iova;
+	bound->output_bytes = output_bytes;
+	dev_info(dev,
+		 "command BO bound VADD dispatch ctx=%u input=0x%llx output=0x%llx bytes=%u/%u\n",
+		 ctx->handle, input_iova, output_iova, input_bytes, output_bytes);
+
+	return 0;
+}
+
+static int apollo_hexagon_prepare_bound_vadd(
+	struct device *dev, struct apollo_hexagon_context *ctx, u32 *command,
+	u32 command_size, struct apollo_hexagon_bound_vadd *bound)
+{
+	struct apollo_hexagon_loaded_exec loaded[APOLLO_HEXAGON_CMDQ_EXEC_SLOT_MAX + 1] = { 0 };
+	u32 packet_count = command_size / APOLLO_HEXAGON_CMDQ_PACKET_BYTES;
+	u32 packet_index;
+	int ret;
+
+	memset(bound, 0, sizeof(*bound));
+	for (packet_index = 0; packet_index < packet_count; packet_index++) {
+		u32 *packet = command +
+			      packet_index * APOLLO_HEXAGON_CMDQ_PACKET_WORDS;
+		u32 slot;
+
+		if (packet[0] == APOLLO_HEXAGON_CMDQ_OPCODE_LOAD_EXECUTABLE &&
+		    apollo_hexagon_cmdq_load_exec_is_valid(packet)) {
+			slot = packet[1];
+			loaded[slot].valid = true;
+			loaded[slot].entry_kind = packet[5];
+			loaded[slot].input_bytes = packet[6];
+			loaded[slot].output_bytes = packet[7];
+			dev_info(dev,
+				 "command BO LOAD_EXECUTABLE slot=%u kind=%u input=%u output=%u\n",
+				 slot, packet[5], packet[6], packet[7]);
+			continue;
+		}
+
+		ret = apollo_hexagon_prepare_bound_vadd_packet(dev, ctx, packet,
+							       loaded, bound);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+static void apollo_hexagon_patch_bound_vadd(struct apollo_hexagon *test,
+						    const struct apollo_hexagon_bound_vadd *bound)
+{
+	const u64 shared_input_iova =
+		test->dma_iova_base + APOLLO_HEXAGON_INPUT_OFFSET;
+	const u64 shared_output_iova =
+		test->dma_iova_base + APOLLO_HEXAGON_OUTPUT_OFFSET;
+
+	if (!bound->active)
+		return;
+
+	apollo_hexagon_write_guest_words(test, bound->input,
+					 APOLLO_HEXAGON_VADD_INPUT_WORDS);
+	bound->packet[2] = lower_32_bits(shared_input_iova);
+	bound->packet[3] = upper_32_bits(shared_input_iova);
+	bound->packet[4] = lower_32_bits(shared_output_iova);
+	bound->packet[5] = upper_32_bits(shared_output_iova);
+}
+
+static void
+apollo_hexagon_bound_vadd_put(struct apollo_hexagon_bound_vadd *bound)
+{
+	if (bound->output_obj)
+		drm_gem_object_put(bound->output_obj);
+	memset(bound, 0, sizeof(*bound));
+}
+
+static int apollo_hexagon_copy_submit_input(
+	const struct apollo_hexagon_executable *exe,
+	const struct drm_apollo_hexagon_submit *job, u32 *input)
+{
+	if (!job->input_ptr || !job->output_ptr)
+		return -EINVAL;
+	if (job->input_bytes != exe->input_bytes ||
+	    job->output_bytes != exe->output_bytes)
+		return -EINVAL;
+	if (job->input_bytes % sizeof(u32) ||
+	    job->output_bytes % sizeof(u32))
+		return -EINVAL;
+	if (job->input_bytes > APOLLO_HEXAGON_CNN_INPUT_WORDS * sizeof(u32) ||
+	    job->output_bytes > APOLLO_HEXAGON_CNN_OUTPUT_WORDS * sizeof(u32))
+		return -EINVAL;
+
+	if (copy_from_user(input, u64_to_user_ptr(job->input_ptr),
+			   job->input_bytes))
+		return -EFAULT;
+
+	return 0;
+}
+
+static int apollo_hexagon_submit_executable(
+	struct device *dev, struct apollo_hexagon *test,
+	const struct apollo_hexagon_executable *exe,
+	struct drm_apollo_hexagon_submit *job, u32 *job_status,
+	u32 *job_result)
+{
+	const u64 input_iova = test->dma_iova_base + APOLLO_HEXAGON_INPUT_OFFSET;
+	const u64 output_iova = test->dma_iova_base + APOLLO_HEXAGON_OUTPUT_OFFSET;
+	const u64 cmdq_iova = test->dma_iova_base + APOLLO_HEXAGON_CMDQ_OFFSET;
+	u32 input[APOLLO_HEXAGON_CNN_INPUT_WORDS] = { 0 };
+	u32 output[APOLLO_HEXAGON_CNN_OUTPUT_WORDS] = { 0 };
+	bool use_cmdq_vadd = exe->entry_kind == APOLLO_HEXAGON_EXEC_KIND_VADD;
+	u32 input_words;
+	u32 output_words;
+	u32 cmdq_status;
+	u32 cmdq_fault;
+	u32 cmdq_head;
+	u32 queue_id;
+	u32 fence_seq = 0;
+	u32 final_status = 0;
+	u32 final_result = 0;
+	int ret;
+
+	ret = apollo_hexagon_copy_submit_input(exe, job, input);
+	if (ret)
+		return ret;
+
+	queue_id = job->queue_id ? job->queue_id : exe->queue_id;
+	if (queue_id != exe->queue_id)
+		return -EINVAL;
+
+	input_words = exe->input_bytes / sizeof(u32);
+	output_words = exe->output_bytes / sizeof(u32);
+
+	mutex_lock(&test->lock);
+
+	ret = apollo_hexagon_dynamic_map(dev, test);
+	if (ret)
+		goto out_unlock;
+
+	apollo_hexagon_write_guest_words(test, input, input_words);
+	if (use_cmdq_vadd) {
+		dev_info(dev,
+			 "APKO CMDQ dispatch start handle=%u kind=%u queue=%u input=%u output=%u\n",
+			 exe->handle, exe->entry_kind, queue_id,
+			 exe->input_bytes, exe->output_bytes);
+		apollo_hexagon_write_cmdq_dispatch_vadd(
+			test, input_iova, output_iova, exe->input_bytes,
+			exe->output_bytes);
+		dma_wmb();
+		writel(lower_32_bits(cmdq_iova),
+		       test->regs + APOLLO_HEXAGON_REG_CMDQ_BASE_LO);
+		writel(upper_32_bits(cmdq_iova),
+		       test->regs + APOLLO_HEXAGON_REG_CMDQ_BASE_HI);
+		writel(APOLLO_HEXAGON_CMDQ_SIZE,
+		       test->regs + APOLLO_HEXAGON_REG_CMDQ_SIZE);
+		writel(0, test->regs + APOLLO_HEXAGON_REG_CMDQ_HEAD);
+		writel(APOLLO_HEXAGON_CMDQ_PACKET_BYTES,
+		       test->regs + APOLLO_HEXAGON_REG_CMDQ_TAIL);
+		writel(queue_id, test->regs + APOLLO_HEXAGON_REG_JOB_QUEUE);
+		writel(0, test->regs + APOLLO_HEXAGON_REG_JOB_STATUS);
+		writel(0, test->regs + APOLLO_HEXAGON_REG_JOB_RESULT);
+		apollo_hexagon_prepare_async_fence(test, queue_id);
+		writel(APOLLO_HEXAGON_JOB_CTRL_START,
+		       test->regs + APOLLO_HEXAGON_REG_CMDQ_DOORBELL);
+	} else {
+		dev_info(dev,
+			 "APKO dispatch start handle=%u kind=%u queue=%u input=%u output=%u\n",
+			 exe->handle, exe->entry_kind, queue_id,
+			 exe->input_bytes, exe->output_bytes);
+		dma_wmb();
+		writel(lower_32_bits(input_iova),
+		       test->regs + APOLLO_HEXAGON_REG_JOB_INPUT);
+		writel(lower_32_bits(output_iova),
+		       test->regs + APOLLO_HEXAGON_REG_JOB_OUTPUT);
+		writel(exe->input_bytes,
+		       test->regs + APOLLO_HEXAGON_REG_JOB_INPUT_BYTES);
+		writel(exe->output_bytes,
+		       test->regs + APOLLO_HEXAGON_REG_JOB_OUTPUT_BYTES);
+		writel(queue_id, test->regs + APOLLO_HEXAGON_REG_JOB_QUEUE);
+		writel(0, test->regs + APOLLO_HEXAGON_REG_JOB_STATUS);
+		writel(0, test->regs + APOLLO_HEXAGON_REG_JOB_RESULT);
+		apollo_hexagon_prepare_async_fence(test, queue_id);
+		writel(APOLLO_HEXAGON_JOB_CTRL_START,
+		       test->regs + APOLLO_HEXAGON_REG_JOB_CTRL);
+	}
+
+	ret = apollo_hexagon_wait_job(dev, test, queue_id,
+				      exe->expected_result, &fence_seq,
+				      &final_status, &final_result);
+	if (job_status)
+		*job_status = final_status;
+	if (job_result)
+		*job_result = final_result;
+	if (ret) {
+		job->status = final_result;
+		job->fence_seq = fence_seq;
+		goto out_unlock;
+	}
+
+	if (use_cmdq_vadd) {
+		cmdq_status = readl(test->regs + APOLLO_HEXAGON_REG_CMDQ_STATUS);
+		cmdq_fault = readl(test->regs +
+				   APOLLO_HEXAGON_REG_CMDQ_FAULT_CODE);
+		cmdq_head = readl(test->regs + APOLLO_HEXAGON_REG_CMDQ_HEAD);
+		if (cmdq_status != APOLLO_HEXAGON_CMDQ_STATUS_DONE ||
+		    cmdq_fault != APOLLO_HEXAGON_CMDQ_FAULT_NONE ||
+		    cmdq_head != APOLLO_HEXAGON_CMDQ_PACKET_BYTES) {
+			final_status = cmdq_status;
+			final_result = cmdq_fault;
+			if (job_status)
+				*job_status = final_status;
+			if (job_result)
+				*job_result = final_result;
+			job->status = cmdq_fault;
+			job->fence_seq = fence_seq;
+			dev_err(dev,
+				"APKO CMDQ dispatch failed handle=%u status=0x%x fault=0x%x head=0x%x\n",
+				exe->handle, cmdq_status, cmdq_fault, cmdq_head);
+			ret = -EIO;
+			goto out_unlock;
+		}
+		dev_info(dev,
+			 "APKO CMDQ dispatch complete handle=%u kind=%u head=%u fence=%u\n",
+			 exe->handle, exe->entry_kind, cmdq_head, fence_seq);
+	}
+
+	dma_rmb();
+	apollo_hexagon_read_guest_words(test, output, output_words);
+	job->status = exe->expected_result;
+	job->queue_id = queue_id;
+	job->fence_seq = fence_seq;
+	dev_info(dev,
+		 "generic submit ok handle=%u queue=%u fence=%u status=0x%x\n",
+		 exe->handle, queue_id, fence_seq, job->status);
+	dev_info(dev, "APKO dispatch complete handle=%u kind=%u\n",
+		 exe->handle, exe->entry_kind);
+	ret = 0;
+
+out_unlock:
+	mutex_unlock(&test->lock);
+	if (ret)
+		return ret;
+
+	if (copy_to_user(u64_to_user_ptr(job->output_ptr), output,
+			 job->output_bytes))
+		return -EFAULT;
+
+	return 0;
+}
+
+static int apollo_hexagon_wait_cmdq(struct device *dev,
+				    struct apollo_hexagon *test,
+				    u32 queue_id, u32 expected_head,
+				    u32 *fence_seq, u32 *final_status,
+				    u32 *final_fault, u32 *final_head)
+{
+	u32 status = APOLLO_HEXAGON_CMDQ_STATUS_ERROR;
+	u32 fault = APOLLO_HEXAGON_CMDQ_FAULT_NONE;
+	u32 fence = 0;
+	u32 head = 0;
+	u32 irq;
+	unsigned long timeout;
+	int tries;
+
+	status = readl(test->regs + APOLLO_HEXAGON_REG_CMDQ_STATUS);
+	irq = readl(test->regs + APOLLO_HEXAGON_REG_IRQ_STATUS) |
+	      atomic_read(&test->async_irq_pending);
+	if (test->doorbell_irq >= 0 &&
+	    status != APOLLO_HEXAGON_CMDQ_STATUS_DONE &&
+	    status != APOLLO_HEXAGON_CMDQ_STATUS_ERROR &&
+	    !(irq & BIT(queue_id))) {
+		timeout = wait_for_completion_timeout(
+			&test->async_fence,
+			msecs_to_jiffies(APOLLO_HEXAGON_ACCEL_TIMEOUT_MS));
+		if (timeout) {
+			dev_info(dev,
+				 "command BO async fence irq wait signaled queue=%u irq=%d\n",
+				 queue_id, test->doorbell_irq);
+		} else {
+			dev_warn(dev,
+				 "command BO async fence irq wait timeout queue=%u irq=%d; polling fallback\n",
+				 queue_id, test->doorbell_irq);
+		}
+	}
+
+	for (tries = 0;
+	     tries < APOLLO_HEXAGON_ACCEL_TIMEOUT_MS /
+		     APOLLO_HEXAGON_ACCEL_POLL_MS;
+	     tries++) {
+		status = readl(test->regs + APOLLO_HEXAGON_REG_CMDQ_STATUS);
+		if (status == APOLLO_HEXAGON_CMDQ_STATUS_DONE ||
+		    status == APOLLO_HEXAGON_CMDQ_STATUS_ERROR)
+			break;
+		msleep(APOLLO_HEXAGON_ACCEL_POLL_MS);
+	}
+
+	fault = readl(test->regs + APOLLO_HEXAGON_REG_CMDQ_FAULT_CODE);
+	head = readl(test->regs + APOLLO_HEXAGON_REG_CMDQ_HEAD);
+	fence = readl(test->regs + APOLLO_HEXAGON_REG_CMDQ_FENCE_VALUE);
+	if (final_status)
+		*final_status = status;
+	if (final_fault)
+		*final_fault = fault;
+	if (final_head)
+		*final_head = head;
+	if (fence_seq)
+		*fence_seq = fence;
+	if (status != APOLLO_HEXAGON_CMDQ_STATUS_DONE ||
+	    fault != APOLLO_HEXAGON_CMDQ_FAULT_NONE ||
+	    head != expected_head) {
+		dev_err(dev,
+			"command BO submit failed queue=%u status=0x%x fault=0x%x head=0x%x expected=0x%x\n",
+			queue_id, status, fault, head, expected_head);
+		return -EIO;
+	}
+
+	irq = readl(test->regs + APOLLO_HEXAGON_REG_IRQ_STATUS) |
+	      atomic_read(&test->async_irq_pending);
+	if (!(irq & BIT(queue_id))) {
+		dev_err(dev, "command BO async irq missing queue=%u irq=0x%x\n",
+			queue_id, irq);
+		return -EIO;
+	}
+
+	atomic_andnot(BIT(queue_id), &test->async_irq_pending);
+	writel(BIT(queue_id), test->regs + APOLLO_HEXAGON_REG_IRQ_ACK);
+	dev_info(dev,
+		 "command BO fence signaled queue=%u fence=%u irq=0x%x\n",
+		 queue_id, fence, irq);
+
+	return 0;
+}
+
+static int apollo_hexagon_validate_apko_header(
+	const struct drm_apollo_hexagon_apko_header *header,
+	struct apollo_hexagon_executable *exe)
+{
+	if (header->magic != APOLLO_HEXAGON_APKO_MAGIC ||
+	    header->header_bytes < sizeof(*header) ||
+	    header->abi_version != APOLLO_HEXAGON_APKO_ABI_VERSION ||
+	    header->executable_format != APOLLO_HEXAGON_EXEC_FORMAT_APKO_V0)
+		return -EINVAL;
+	if (header->reserved[0] || header->reserved[1] ||
+	    header->reserved[2] || header->reserved[3] ||
+	    header->reserved[4])
+		return -EINVAL;
+
+	switch (header->entry_kind) {
+	case APOLLO_HEXAGON_EXEC_KIND_CNN:
+		if (header->input_bytes !=
+		    APOLLO_HEXAGON_CNN_INPUT_WORDS * sizeof(u32) ||
+		    header->output_bytes !=
+		    APOLLO_HEXAGON_CNN_OUTPUT_WORDS * sizeof(u32))
+			return -EINVAL;
+		exe->queue_id = APOLLO_HEXAGON_QUEUE_CNN;
+		exe->expected_result = APOLLO_HEXAGON_JOB_RESULT_OK;
+		break;
+	case APOLLO_HEXAGON_EXEC_KIND_VADD:
+		if (header->input_bytes !=
+		    APOLLO_HEXAGON_VADD_INPUT_WORDS * sizeof(u32) ||
+		    header->output_bytes !=
+		    APOLLO_HEXAGON_VADD_OUTPUT_WORDS * sizeof(u32))
+			return -EINVAL;
+		exe->queue_id = APOLLO_HEXAGON_QUEUE_VADD;
+		exe->expected_result = APOLLO_HEXAGON_JOB_RESULT_VADD_OK;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	exe->entry_kind = header->entry_kind;
+	exe->input_bytes = header->input_bytes;
+	exe->output_bytes = header->output_bytes;
+
+	return 0;
+}
+
+int apollo_hexagon_file_open(struct drm_device *dev, struct drm_file *file)
+{
+	struct apollo_hexagon_file *afile;
+
+	afile = kzalloc(sizeof(*afile), GFP_KERNEL);
+	if (!afile)
+		return -ENOMEM;
+
+	xa_init_flags(&afile->executables, XA_FLAGS_ALLOC1);
+	xa_init_flags(&afile->contexts, XA_FLAGS_ALLOC1);
+	mutex_init(&afile->lock);
+	file->driver_priv = afile;
+
+	return 0;
+}
+
+void apollo_hexagon_file_postclose(struct drm_device *dev, struct drm_file *file)
+{
+	struct apollo_hexagon_file *afile = file->driver_priv;
+	struct apollo_hexagon_executable *exe;
+	struct apollo_hexagon_context *ctx;
+	unsigned long handle;
+
+	if (!afile)
+		return;
+
+	xa_for_each(&afile->executables, handle, exe)
+		kfree(exe);
+	xa_destroy(&afile->executables);
+	xa_for_each(&afile->contexts, handle, ctx)
+		apollo_hexagon_context_free(ctx);
+	xa_destroy(&afile->contexts);
+	mutex_destroy(&afile->lock);
+	kfree(afile);
+	file->driver_priv = NULL;
+}
+
+int apollo_hexagon_ioctl_exec_create(struct drm_device *drm, void *data,
+				     struct drm_file *file)
+{
+	struct apollo_hexagon_file *afile = file->driver_priv;
+	struct drm_apollo_hexagon_exec_create *args = data;
+	struct drm_apollo_hexagon_apko_header header;
+	struct apollo_hexagon_executable *exe;
+	u32 handle;
+	int ret;
+
+	if (!afile)
+		return -EINVAL;
+	if (args->size != sizeof(*args) || args->flags || !args->data_ptr ||
+	    args->data_size < sizeof(header))
+		return -EINVAL;
+	if (args->reserved[0] || args->reserved[1] ||
+	    args->reserved[2] || args->reserved[3])
+		return -EINVAL;
+
+	if (copy_from_user(&header, u64_to_user_ptr(args->data_ptr),
+			   sizeof(header)))
+		return -EFAULT;
+	if (header.header_bytes > args->data_size)
+		return -EINVAL;
+
+	exe = kzalloc(sizeof(*exe), GFP_KERNEL);
+	if (!exe)
+		return -ENOMEM;
+
+	ret = apollo_hexagon_validate_apko_header(&header, exe);
+	if (ret)
+		goto err_free;
+
+	mutex_lock(&afile->lock);
+	ret = xa_alloc(&afile->executables, &handle, exe,
+		       XA_LIMIT(1, U32_MAX), GFP_KERNEL);
+	if (!ret)
+		exe->handle = handle;
+	mutex_unlock(&afile->lock);
+	if (ret)
+		goto err_free;
+
+	args->handle = handle;
+	args->executable_format = header.executable_format;
+	args->abi_version = header.abi_version;
+	args->entry_kind = header.entry_kind;
+	args->input_bytes = header.input_bytes;
+	args->output_bytes = header.output_bytes;
+
+	return 0;
+
+err_free:
+	kfree(exe);
+	return ret;
+}
+
+int apollo_hexagon_ioctl_exec_destroy(struct drm_device *drm, void *data,
+				      struct drm_file *file)
+{
+	struct apollo_hexagon_file *afile = file->driver_priv;
+	struct drm_apollo_hexagon_exec_destroy *args = data;
+	struct apollo_hexagon_executable *exe;
+
+	if (!afile)
+		return -EINVAL;
+	if (!args->handle || args->pad)
+		return -EINVAL;
+
+	mutex_lock(&afile->lock);
+	exe = xa_erase(&afile->executables, args->handle);
+	mutex_unlock(&afile->lock);
+	if (!exe)
+		return -ENOENT;
+
+	kfree(exe);
+	return 0;
+}
+
+static void apollo_hexagon_record_submit_fault(
+	struct apollo_hexagon_file *afile,
+	const struct apollo_hexagon_executable *exe,
+	const struct drm_apollo_hexagon_submit *job, u32 status, u32 result)
+{
+	struct drm_apollo_hexagon_fault fault = { 0 };
+
+	fault.size = sizeof(fault);
+	fault.queue_id = job->queue_id ? job->queue_id : exe->queue_id;
+	fault.code = APOLLO_HEXAGON_FAULT_CODE_JOB_FAILED;
+	fault.status = status;
+	fault.result = result;
+	fault.fence_seq = job->fence_seq;
+
+	mutex_lock(&afile->lock);
+	afile->last_fault = fault;
+	afile->has_fault = true;
+	mutex_unlock(&afile->lock);
+}
+
+static void apollo_hexagon_record_cmd_fault(
+	struct apollo_hexagon_file *afile,
+	const struct drm_apollo_hexagon_cmd_submit *submit,
+	u32 status, u32 fault_code)
+{
+	struct drm_apollo_hexagon_fault fault = { 0 };
+
+	fault.size = sizeof(fault);
+	fault.queue_id = submit->queue_id;
+	fault.code = APOLLO_HEXAGON_FAULT_CODE_JOB_FAILED;
+	fault.status = status;
+	fault.result = fault_code;
+	fault.fence_seq = submit->fence_seq;
+
+	mutex_lock(&afile->lock);
+	afile->last_fault = fault;
+	afile->has_fault = true;
+	mutex_unlock(&afile->lock);
+}
+
+int apollo_hexagon_ioctl_get_fault(struct drm_device *drm, void *data,
+				   struct drm_file *file)
+{
+	struct apollo_hexagon_file *afile = file->driver_priv;
+	struct drm_apollo_hexagon_fault *args = data;
+	struct drm_apollo_hexagon_fault fault;
+	bool clear;
+	int ret = 0;
+
+	if (!afile)
+		return -EINVAL;
+	if (args->size != sizeof(*args) ||
+	    (args->flags & ~APOLLO_HEXAGON_GET_FAULT_FLAG_CLEAR))
+		return -EINVAL;
+	if (args->reserved[0] || args->reserved[1] ||
+	    args->reserved[2] || args->reserved[3] || args->reserved[4])
+		return -EINVAL;
+
+	clear = args->flags & APOLLO_HEXAGON_GET_FAULT_FLAG_CLEAR;
+
+	mutex_lock(&afile->lock);
+	if (!afile->has_fault) {
+		ret = -ENODATA;
+		goto out_unlock;
+	}
+
+	fault = afile->last_fault;
+	if (clear) {
+		memset(&afile->last_fault, 0, sizeof(afile->last_fault));
+		afile->has_fault = false;
+	}
+	*args = fault;
+
+out_unlock:
+	mutex_unlock(&afile->lock);
+	return ret;
+}
+
+int apollo_hexagon_ioctl_cmd_submit(struct drm_device *drm, void *data,
+				    struct drm_file *file)
+{
+	struct apollo_hexagon *test = to_apollo_hexagon(drm);
+	struct apollo_hexagon_file *afile = file->driver_priv;
+	struct drm_apollo_hexagon_cmd_submit *args = data;
+	struct apollo_hexagon_context *ctx;
+	struct apollo_hexagon_bound_vadd bound_vadd;
+	u32 command[APOLLO_HEXAGON_CMDQ_SUBMIT_MAX_BYTES / sizeof(u32)] = { 0 };
+	u32 output[APOLLO_HEXAGON_VADD_OUTPUT_WORDS] = { 0 };
+	const u64 cmdq_iova = test->dma_iova_base + APOLLO_HEXAGON_CMDQ_OFFSET;
+	u32 queue_count;
+	u32 cmdq_status = 0;
+	u32 cmdq_fault = 0;
+	u32 cmdq_head = 0;
+	u32 fence_seq = 0;
+	int idx;
+	int ret;
+
+	if (!afile)
+		return -EINVAL;
+	if (args->size != sizeof(*args) || args->flags ||
+	    !args->context_handle || !args->command_bo_handle ||
+	    args->status || args->result || args->fence_seq)
+		return -EINVAL;
+	if (args->reserved[0] || args->reserved[1] ||
+	    args->reserved[2] || args->reserved[3])
+		return -EINVAL;
+
+	ret = apollo_hexagon_copy_cmd_buffer_from_bo(
+		file, args->command_bo_handle, args->command_offset,
+		args->command_size, command);
+	if (ret)
+		return ret;
+
+	memset(&bound_vadd, 0, sizeof(bound_vadd));
+	mutex_lock(&afile->lock);
+	ctx = xa_load(&afile->contexts, args->context_handle);
+	if (!ctx) {
+		ret = -ENOENT;
+	} else {
+		ret = apollo_hexagon_prepare_bound_vadd(
+			test->dev, ctx, command, args->command_size, &bound_vadd);
+	}
+	mutex_unlock(&afile->lock);
+	if (ret)
+		goto out_bound_vadd;
+
+	if (!drm_dev_enter(drm, &idx)) {
+		ret = -ENODEV;
+		goto out_bound_vadd;
+	}
+
+	queue_count = readl(test->regs + APOLLO_HEXAGON_REG_QUEUE_CAPS);
+	if (args->queue_id >= queue_count) {
+		ret = -EINVAL;
+		goto out_dev_exit;
+	}
+
+	mutex_lock(&test->lock);
+
+	ret = apollo_hexagon_dynamic_map(test->dev, test);
+	if (ret)
+		goto out_unlock;
+
+	apollo_hexagon_patch_bound_vadd(test, &bound_vadd);
+
+	dev_info(test->dev,
+		 "command BO submit start ctx=%u bo=%u queue=%u offset=%llu size=%u opcode=%u\n",
+		 args->context_handle, args->command_bo_handle, args->queue_id,
+		 args->command_offset, args->command_size, command[0]);
+	apollo_hexagon_write_cmdq_buffer(test, command, args->command_size);
+	dma_wmb();
+	writel(lower_32_bits(cmdq_iova),
+	       test->regs + APOLLO_HEXAGON_REG_CMDQ_BASE_LO);
+	writel(upper_32_bits(cmdq_iova),
+	       test->regs + APOLLO_HEXAGON_REG_CMDQ_BASE_HI);
+	writel(APOLLO_HEXAGON_CMDQ_SIZE,
+	       test->regs + APOLLO_HEXAGON_REG_CMDQ_SIZE);
+	writel(0, test->regs + APOLLO_HEXAGON_REG_CMDQ_HEAD);
+	writel(args->command_size, test->regs + APOLLO_HEXAGON_REG_CMDQ_TAIL);
+	writel(args->queue_id, test->regs + APOLLO_HEXAGON_REG_JOB_QUEUE);
+	writel(0, test->regs + APOLLO_HEXAGON_REG_CMDQ_STATUS);
+	writel(0, test->regs + APOLLO_HEXAGON_REG_CMDQ_FAULT_CODE);
+	writel(0, test->regs + APOLLO_HEXAGON_REG_JOB_STATUS);
+	writel(0, test->regs + APOLLO_HEXAGON_REG_JOB_RESULT);
+	apollo_hexagon_prepare_async_fence(test, args->queue_id);
+	writel(APOLLO_HEXAGON_JOB_CTRL_START,
+	       test->regs + APOLLO_HEXAGON_REG_CMDQ_DOORBELL);
+
+	ret = apollo_hexagon_wait_cmdq(test->dev, test, args->queue_id,
+				       args->command_size, &fence_seq,
+				       &cmdq_status, &cmdq_fault, &cmdq_head);
+	args->status = cmdq_status;
+	args->result = cmdq_fault;
+	args->fence_seq = fence_seq;
+	if (ret)
+		goto out_unlock;
+
+	if (bound_vadd.active) {
+		dma_rmb();
+		apollo_hexagon_read_guest_words(
+			test, output, APOLLO_HEXAGON_VADD_OUTPUT_WORDS);
+	}
+
+	dev_info(test->dev,
+		 "command BO submit complete ctx=%u bo=%u queue=%u head=%u fence=%u\n",
+		 args->context_handle, args->command_bo_handle, args->queue_id,
+		 cmdq_head, fence_seq);
+
+out_unlock:
+	mutex_unlock(&test->lock);
+	if (!ret && bound_vadd.active) {
+		ret = apollo_hexagon_bo_copy_to(bound_vadd.output_obj,
+						bound_vadd.output_offset,
+						bound_vadd.output_bytes, output);
+		if (!ret)
+			dev_info(test->dev,
+				 "command BO bound VADD output copied ctx=%u output=0x%llx bytes=%u\n",
+				 args->context_handle, bound_vadd.output_iova,
+				 bound_vadd.output_bytes);
+	}
+out_dev_exit:
+	drm_dev_exit(idx);
+out_bound_vadd:
+	apollo_hexagon_bound_vadd_put(&bound_vadd);
+	if (ret == -EIO)
+		apollo_hexagon_record_cmd_fault(afile, args, cmdq_status,
+						cmdq_fault);
+	return ret;
+}
+
+int apollo_hexagon_ioctl_submit(struct drm_device *drm, void *data,
+				struct drm_file *file)
+{
+	struct apollo_hexagon *test = to_apollo_hexagon(drm);
+	struct apollo_hexagon_file *afile = file->driver_priv;
+	struct drm_apollo_hexagon_submit *args = data;
+	struct apollo_hexagon_executable exe;
+	struct apollo_hexagon_executable *stored;
+	u32 job_status = 0;
+	u32 job_result = 0;
+	int idx;
+	int ret;
+
+	if (!afile)
+		return -EINVAL;
+	if (args->size != sizeof(*args) || args->flags ||
+	    !args->executable_handle)
+		return -EINVAL;
+	if (args->reserved[0] || args->reserved[1] ||
+	    args->reserved[2] || args->reserved[3])
+		return -EINVAL;
+
+	mutex_lock(&afile->lock);
+	stored = xa_load(&afile->executables, args->executable_handle);
+	if (stored)
+		exe = *stored;
+	mutex_unlock(&afile->lock);
+	if (!stored)
+		return -ENOENT;
+
+	if (!drm_dev_enter(drm, &idx))
+		return -ENODEV;
+
+	ret = apollo_hexagon_submit_executable(test->dev, test, &exe, args,
+					       &job_status, &job_result);
+	drm_dev_exit(idx);
+	if (ret == -EIO)
+		apollo_hexagon_record_submit_fault(afile, &exe, args, job_status,
+						   job_result);
+
+	return ret;
+}
