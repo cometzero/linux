@@ -743,7 +743,7 @@
 			compatible = "arm,mhuv3";
 			reg = <0x0 0x40020000 0x0 0x30000>;
 			interrupts = <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH>;
-			interrupt-names = "combined";
+			interrupt-names = "pbx-dbch-xfer-ack-0";
 			clocks = <&soc_clk24mhz>;
 			#mbox-cells = <3>;
 		};
