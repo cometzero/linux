@@ -1,0 +1,96 @@
+// SPDX-License-Identifier: (GPL-2.0 OR BSD-3-Clause)
+/*
+ * Copyright (c) 2025-2026, Arm Limited. All rights reserved.
+ */
+
+/dts-v1/;
+
+/* QVP currently reuses the Apollo FVP-compatible hardware description. */
+#include "apollo-qvp.dtsi"
+
+/ {
+	model = "Apollo QVP";
+	compatible = "arm,apollo-qvp", "arm,zena-css", "arm,vexpress";
+
+	chosen {
+		stdout-path = &soc_serial0;
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+
+		/* ~2GB mapped at 2GB, another 2GB at 2TB */
+		reg = <0x00000000 0x80000000 0x00000000 0x7f000000>,
+		<0x00000200 0x00000000 0x00000000 0x80000000>;
+	};
+};
+
+&soc {
+	virtio@30020000 {
+		compatible = "virtio,mmio";
+		reg = <0x0 0x30020000 0x0 0x10000>;
+		interrupts = <GIC_SPI 257 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
+	virtio@30030000 {
+		compatible = "virtio,mmio";
+		reg = <0x0 0x30030000 0x0 0x10000>;
+		interrupts = <GIC_SPI 258 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
+	virtio@30040000 {
+		compatible = "virtio,mmio";
+		reg = <0x0 0x30040000 0x0 0x10000>;
+		interrupts = <GIC_SPI 259 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
+	virtio@30050000 {
+		compatible = "virtio,mmio";
+		reg = <0x0 0x30050000 0x0 0x10000>;
+		interrupts = <GIC_SPI 260 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
+	virtio@30060000 {
+		compatible = "virtio,mmio";
+		reg = <0x0 0x30060000 0x0 0x10000>;
+		interrupts = <GIC_SPI 261 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
+	virtio@30080000 {
+		compatible = "virtio,mmio";
+		reg = <0x0 0x30080000 0x0 0x10000>;
+		interrupts = <GIC_SPI 263 IRQ_TYPE_LEVEL_HIGH>;
+	};
+};
+
+&si_cl1 {
+	status = "okay";
+};
+
+&si_remoteproc {
+	status = "okay";
+};
+
+&si_cl1_rproc_rsctbl {
+	status = "okay";
+};
+
+&si_cl1_vdev0vring0 {
+	status = "okay";
+};
+
+&si_cl1_vdev0vring1 {
+	status = "okay";
+};
+
+&si_cl1_vdev0buffer {
+	status = "okay";
+};
+
+&si_cl1_mbox_rproc_tx {
+	status = "okay";
+};
+
+&si_cl1_mbox_rproc_rx {
+	status = "okay";
+};
