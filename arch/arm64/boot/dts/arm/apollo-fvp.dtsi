@@ -604,6 +604,11 @@
 		#size-cells = <2>;
 		ranges;
 
+		ras_buffer: cper@ffa00000 {
+			reg = <0x0 0xffa00000 0x0 0x00100000>;
+			no-map;
+		};
+
 		si_cl1_rproc_rsctbl: rsctbl@100000 {
 			status = "disabled";
 			compatible = "shared-dma-pool";
@@ -667,6 +672,14 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
+
+		ras-ffh@ffa00000 {
+			compatible = "arm,ras-ffh";
+			reg = <0x0 0xffa00000 0x0 0x00100000>;
+			status-block-size = <0x00010000>;
+			memory-region = <&ras_buffer>;
+			interrupts = <GIC_SPI 57 IRQ_TYPE_EDGE_RISING>;
+		};
 
 		sram: sram@180000 {
 			compatible = "mmio-sram";
