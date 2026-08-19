@@ -4,6 +4,8 @@
 
 #include <acpi/apei.h>
 #include <acpi/hed.h>
+#include <linux/estatus.h>
+#include <linux/notifier.h>
 
 /*
  * One struct ghes is created for each generic hardware error source.
@@ -21,6 +23,7 @@ struct ghes {
 		struct acpi_hest_generic_v2 *generic_v2;
 	};
 	struct acpi_hest_generic_status *estatus;
+	struct estatus_source estatus_src;
 	unsigned long flags;
 	union {
 		struct list_head list;
@@ -29,6 +32,7 @@ struct ghes {
 	};
 	struct device *dev;
 	struct list_head elist;
+	char name[32];
 };
 
 struct ghes_estatus_node {
@@ -46,10 +50,10 @@ struct ghes_estatus_cache {
 };
 
 enum {
-	GHES_SEV_NO = 0x0,
-	GHES_SEV_CORRECTED = 0x1,
-	GHES_SEV_RECOVERABLE = 0x2,
-	GHES_SEV_PANIC = 0x3,
+	GHES_SEV_NO = ESTATUS_SEV_NO,
+	GHES_SEV_CORRECTED = ESTATUS_SEV_CORRECTED,
+	GHES_SEV_RECOVERABLE = ESTATUS_SEV_RECOVERABLE,
+	GHES_SEV_PANIC = ESTATUS_SEV_PANIC,
 };
 
 #ifdef CONFIG_ACPI_APEI_GHES
@@ -72,6 +76,12 @@ void ghes_unregister_vendor_record_notifier(struct notifier_block *nb);
 struct list_head *ghes_get_devices(void);
 
 void ghes_estatus_pool_region_free(unsigned long addr, u32 size);
+int ghes_register_vendor_record_notifier(struct notifier_block *nb);
+void ghes_unregister_vendor_record_notifier(struct notifier_block *nb);
+void ghes_register_report_chain(struct notifier_block *nb);
+void ghes_unregister_report_chain(struct notifier_block *nb);
+
+void estatus_pool_region_free(unsigned long addr, u32 size);
 #else
 static inline struct list_head *ghes_get_devices(void) { return NULL; }
 
@@ -80,46 +90,8 @@ static inline void ghes_estatus_pool_region_free(unsigned long addr, u32 size) {
 
 int ghes_estatus_pool_init(unsigned int num_ghes);
 
-static inline int acpi_hest_get_version(struct acpi_hest_generic_data *gdata)
-{
-	return gdata->revision >> 8;
-}
-
-static inline void *acpi_hest_get_payload(struct acpi_hest_generic_data *gdata)
-{
-	if (acpi_hest_get_version(gdata) >= 3)
-		return (void *)(((struct acpi_hest_generic_data_v300 *)(gdata)) + 1);
-
-	return gdata + 1;
-}
-
-static inline int acpi_hest_get_error_length(struct acpi_hest_generic_data *gdata)
-{
-	return ((struct acpi_hest_generic_data *)(gdata))->error_data_length;
-}
-
-static inline int acpi_hest_get_size(struct acpi_hest_generic_data *gdata)
-{
-	if (acpi_hest_get_version(gdata) >= 3)
-		return sizeof(struct acpi_hest_generic_data_v300);
-
-	return sizeof(struct acpi_hest_generic_data);
-}
-
-static inline int acpi_hest_get_record_size(struct acpi_hest_generic_data *gdata)
-{
-	return (acpi_hest_get_size(gdata) + acpi_hest_get_error_length(gdata));
-}
-
-static inline void *acpi_hest_get_next(struct acpi_hest_generic_data *gdata)
-{
-	return (void *)(gdata) + acpi_hest_get_record_size(gdata);
-}
-
 #define apei_estatus_for_each_section(estatus, section)			\
-	for (section = (struct acpi_hest_generic_data *)(estatus + 1);	\
-	     (void *)section - (void *)(estatus + 1) < estatus->data_length; \
-	     section = acpi_hest_get_next(section))
+	estatus_for_each_section(estatus, section)
 
 #ifdef CONFIG_ACPI_APEI_SEA
 int ghes_notify_sea(void);
