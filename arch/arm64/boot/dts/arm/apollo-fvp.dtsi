@@ -786,6 +786,21 @@
 			clock-names = "apb_pclk";
 		};
 
+		smd_gpio: gpio@40750000 {
+			compatible = "arm,pl061", "arm,primecell";
+			reg = <0x0 0x40750000 0x0 0x1000>;
+			interrupts = <GIC_SPI 193 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&soc_clk24mhz>;
+			clock-names = "apb_pclk";
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			gpio-line-names =
+				"smd-gpio0", "smd-gpio1", "smd-gpio2", "smd-gpio3",
+				"smd-gpio4", "smd-gpio5", "smd-gpio6", "smd-gpio7";
+		};
+
 		mbox_db_tx: mailbox@40020000 {
 			compatible = "arm,mhuv3";
 			reg = <0x0 0x40020000 0x0 0x30000>;
