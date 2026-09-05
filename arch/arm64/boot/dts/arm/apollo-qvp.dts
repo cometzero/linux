@@ -12,6 +12,23 @@
 	model = "Apollo QVP";
 	compatible = "arm,apollo-qvp", "arm,zena-css", "arm,vexpress";
 
+	aliases {
+		i2c0 = &dw_i2c0;
+		i2c1 = &dw_i2c1;
+		i2c2 = &dw_i2c2;
+		i2c3 = &dw_i2c3;
+		i2c4 = &dw_i2c4;
+		i2c5 = &dw_i2c5;
+		serial0 = &dw_uart0;
+		serial1 = &dw_uart1;
+		serial2 = &dw_uart2;
+		serial3 = &dw_uart3;
+		spi0 = &dw_spi0;
+		spi1 = &dw_spi1;
+		spi2 = &dw_spi2;
+		spi3 = &dw_spi3;
+	};
+
 	chosen {
 		stdout-path = &soc_serial0;
 	};
@@ -26,6 +43,16 @@
 };
 
 &soc {
+	smmu: iommu@1c0000000 {
+		compatible = "arm,smmu-v3";
+		reg = <0x1 0xc0000000 0x0 0x8000000>;
+		dma-coherent;
+		#iommu-cells = <1>;
+		interrupts = <GIC_SPI 65 IRQ_TYPE_EDGE_RISING>;
+		interrupt-names = "combined";
+		msi-parent = <&its 0x10000>;
+	};
+
 	virtio@30020000 {
 		compatible = "virtio,mmio";
 		reg = <0x0 0x30020000 0x0 0x10000>;
@@ -60,6 +87,220 @@
 		compatible = "virtio,mmio";
 		reg = <0x0 0x30080000 0x0 0x10000>;
 		interrupts = <GIC_SPI 263 IRQ_TYPE_LEVEL_HIGH>;
+	};
+
+	dw_i2c0: i2c@30100000 {
+		compatible = "snps,designware-i2c";
+		reg = <0x0 0x30100000 0x0 0x10000>;
+		interrupts = <GIC_SPI 320 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ref", "pclk";
+		clock-frequency = <400000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		eeprom@50 {
+			compatible = "atmel,24c02";
+			reg = <0x50>;
+			pagesize = <8>;
+		};
+	};
+
+	dw_i2c1: i2c@30110000 {
+		compatible = "snps,designware-i2c";
+		reg = <0x0 0x30110000 0x0 0x10000>;
+		interrupts = <GIC_SPI 321 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ref", "pclk";
+		clock-frequency = <400000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		eeprom@50 {
+			compatible = "atmel,24c02";
+			reg = <0x50>;
+			pagesize = <8>;
+		};
+	};
+
+	dw_i2c2: i2c@30120000 {
+		compatible = "snps,designware-i2c";
+		reg = <0x0 0x30120000 0x0 0x10000>;
+		interrupts = <GIC_SPI 322 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ref", "pclk";
+		clock-frequency = <400000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		eeprom@50 {
+			compatible = "atmel,24c02";
+			reg = <0x50>;
+			pagesize = <8>;
+		};
+	};
+
+	dw_i2c3: i2c@30130000 {
+		compatible = "snps,designware-i2c";
+		reg = <0x0 0x30130000 0x0 0x10000>;
+		interrupts = <GIC_SPI 323 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ref", "pclk";
+		clock-frequency = <400000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		eeprom@50 {
+			compatible = "atmel,24c02";
+			reg = <0x50>;
+			pagesize = <8>;
+		};
+	};
+
+	dw_i2c4: i2c@30140000 {
+		compatible = "snps,designware-i2c";
+		reg = <0x0 0x30140000 0x0 0x10000>;
+		interrupts = <GIC_SPI 324 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ref", "pclk";
+		clock-frequency = <400000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		eeprom@50 {
+			compatible = "atmel,24c02";
+			reg = <0x50>;
+			pagesize = <8>;
+		};
+	};
+
+	dw_i2c5: i2c@30150000 {
+		compatible = "snps,designware-i2c";
+		reg = <0x0 0x30150000 0x0 0x10000>;
+		interrupts = <GIC_SPI 325 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ref", "pclk";
+		clock-frequency = <400000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		eeprom@50 {
+			compatible = "atmel,24c02";
+			reg = <0x50>;
+			pagesize = <8>;
+		};
+	};
+
+	dw_spi0: spi@30160000 {
+		compatible = "snps,dw-apb-ssi";
+		reg = <0x0 0x30160000 0x0 0x10000>;
+		interrupts = <GIC_SPI 326 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ssi_clk", "pclk";
+		num-cs = <1>;
+		reg-io-width = <4>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		loopback@0 {
+			compatible = "linux,spi-loopback-test";
+			reg = <0>;
+			spi-max-frequency = <1000000>;
+		};
+	};
+
+	dw_spi1: spi@30170000 {
+		compatible = "snps,dw-apb-ssi";
+		reg = <0x0 0x30170000 0x0 0x10000>;
+		interrupts = <GIC_SPI 327 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ssi_clk", "pclk";
+		num-cs = <1>;
+		reg-io-width = <4>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		loopback@0 {
+			compatible = "linux,spi-loopback-test";
+			reg = <0>;
+			spi-max-frequency = <1000000>;
+		};
+	};
+
+	dw_spi2: spi@30180000 {
+		compatible = "snps,dw-apb-ssi";
+		reg = <0x0 0x30180000 0x0 0x10000>;
+		interrupts = <GIC_SPI 328 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ssi_clk", "pclk";
+		num-cs = <1>;
+		reg-io-width = <4>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		loopback@0 {
+			compatible = "linux,spi-loopback-test";
+			reg = <0>;
+			spi-max-frequency = <1000000>;
+		};
+	};
+
+	dw_spi3: spi@30190000 {
+		compatible = "snps,dw-apb-ssi";
+		reg = <0x0 0x30190000 0x0 0x10000>;
+		interrupts = <GIC_SPI 329 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ssi_clk", "pclk";
+		num-cs = <1>;
+		reg-io-width = <4>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		loopback@0 {
+			compatible = "linux,spi-loopback-test";
+			reg = <0>;
+			spi-max-frequency = <1000000>;
+		};
+	};
+
+	dw_uart0: serial@301a0000 {
+		compatible = "snps,dw-apb-uart";
+		reg = <0x0 0x301a0000 0x0 0x10000>;
+		interrupts = <GIC_SPI 330 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "baudclk", "apb_pclk";
+		reg-shift = <2>;
+		reg-io-width = <4>;
+	};
+
+	dw_uart1: serial@301b0000 {
+		compatible = "snps,dw-apb-uart";
+		reg = <0x0 0x301b0000 0x0 0x10000>;
+		interrupts = <GIC_SPI 331 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "baudclk", "apb_pclk";
+		reg-shift = <2>;
+		reg-io-width = <4>;
+	};
+
+	dw_uart2: serial@301c0000 {
+		compatible = "snps,dw-apb-uart";
+		reg = <0x0 0x301c0000 0x0 0x10000>;
+		interrupts = <GIC_SPI 332 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "baudclk", "apb_pclk";
+		reg-shift = <2>;
+		reg-io-width = <4>;
+	};
+
+	dw_uart3: serial@301d0000 {
+		compatible = "snps,dw-apb-uart";
+		reg = <0x0 0x301d0000 0x0 0x10000>;
+		interrupts = <GIC_SPI 333 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "baudclk", "apb_pclk";
+		reg-shift = <2>;
+		reg-io-width = <4>;
 	};
 };
 
