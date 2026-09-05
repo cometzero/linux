@@ -20,6 +20,7 @@
 #include <linux/kernel.h>
 #include <linux/kthread.h>
 #include <linux/mod_devicetable.h>
+#include <linux/moduleparam.h>
 #include <linux/mutex.h>
 #include <linux/of_device.h>
 #include <linux/of_irq.h>
@@ -44,6 +45,11 @@ EXPORT_TRACEPOINT_SYMBOL(spi_transfer_stop);
 #include "internals.h"
 
 static DEFINE_IDR(spi_controller_idr);
+
+static unsigned int transfer_timeout_margin_ms = 200;
+module_param(transfer_timeout_margin_ms, uint, 0644);
+MODULE_PARM_DESC(transfer_timeout_margin_ms,
+		 "extra transfer timeout margin in milliseconds");
 
 static void spidev_release(struct device *dev)
 {
@@ -1456,10 +1462,10 @@ static int spi_transfer_wait(struct spi_controller *ctlr,
 		do_div(ms, speed_hz);
 
 		/*
-		 * Increase it twice and add 200 ms tolerance, use
+		 * Increase it twice and add the configured tolerance, use
 		 * predefined maximum in case of overflow.
 		 */
-		ms += ms + 200;
+		ms += ms + READ_ONCE(transfer_timeout_margin_ms);
 		if (ms > UINT_MAX)
 			ms = UINT_MAX;
 
