@@ -335,3 +335,5 @@
 &si_cl1_mbox_rproc_rx {
 	status = "okay";
 };
+
+#include "apollo-qvp-board.dtsi"

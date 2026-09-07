@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: (GPL-2.0 OR BSD-3-Clause)
+
+#include <dt-bindings/gpio/gpio.h>
+
+&dw_i2c0 {
+	board_gpio: gpio@74 {
+		compatible = "nxp,pca9539";
+		reg = <0x74>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		interrupt-parent = <&smd_gpio>;
+		interrupts = <1 IRQ_TYPE_LEVEL_LOW>;
+		reset-gpios = <&smd_gpio 0 GPIO_ACTIVE_LOW>;
+		gpio-line-names =
+			"pca9539-loop-out0", "pca9539-loop-in1",
+			"pca9539-gpio2", "pca9539-gpio3",
+			"pca9539-gpio4", "pca9539-gpio5",
+			"pca9539-gpio6", "pca9539-gpio7",
+			"pca9539-loop-out8", "pca9539-loop-in9",
+			"pca9539-gpio10", "pca9539-gpio11",
+			"pca9539-gpio12", "pca9539-gpio13",
+			"pca9539-gpio14", "pca9539-gpio15";
+	};
+};
