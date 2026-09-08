@@ -2,7 +2,53 @@
 
 #include <dt-bindings/gpio/gpio.h>
 
+/ {
+	aliases {
+		rtc0 = &{/soc/rtc@300d0000};
+	};
+
+	tps6594-buck1-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_buck1>;
+	};
+
+	tps6594-ldo1-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_ldo1>;
+	};
+};
+
 &dw_i2c0 {
+	board_pmic: pmic@48 {
+		compatible = "ti,tps6594-q1";
+		reg = <0x48>;
+		interrupt-parent = <&smd_gpio>;
+		interrupts = <2 IRQ_TYPE_LEVEL_LOW>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		gpio-line-names =
+			"tps6594-gpio1", "tps6594-gpio2",
+			"tps6594-gpio3", "tps6594-gpio4",
+			"tps6594-gpio5", "tps6594-gpio6",
+			"tps6594-gpio7", "tps6594-gpio8",
+			"tps6594-gpio9", "tps6594-gpio10",
+			"tps6594-gpio11";
+
+		regulators {
+			tps6594_buck1: buck1 {
+				regulator-name = "tps6594-buck1";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_ldo1: ldo1 {
+				regulator-name = "tps6594-ldo1";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+		};
+	};
+
 	board_gpio: gpio@74 {
 		compatible = "nxp,pca9539";
 		reg = <0x74>;
