@@ -709,6 +709,8 @@ patternProperties:
     description: Hewlett Packard Enterprise
   "^hsg,.*":
     description: HannStar Display Co.
+  "^hsoc,.*":
+    description: HSOC Project
   "^htc,.*":
     description: HTC Corporation
   "^huawei,.*":

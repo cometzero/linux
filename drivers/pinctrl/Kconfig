@@ -206,6 +206,17 @@ config PINCTRL_DIGICOLOR
 	select PINMUX
 	select GENERIC_PINCONF
 
+config PINCTRL_HSOC
+	tristate "HSOC PERI0 pin controller"
+	depends on OF && HAS_IOMEM
+	select GPIOLIB
+	select GPIOLIB_IRQCHIP
+	select PINMUX
+	select GENERIC_PINCONF
+	help
+	  Support the HSOC PERI0 pin controller, GPIO banks, pin multiplexing,
+	  electrical configuration and per-pin interrupts.
+
 config PINCTRL_EIC7700
 	tristate "EIC7700 PINCTRL driver"
 	depends on ARCH_ESWIN || COMPILE_TEST
