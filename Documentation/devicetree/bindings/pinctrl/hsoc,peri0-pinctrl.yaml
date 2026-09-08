@@ -13,6 +13,9 @@ description:
   The HSOC PERI controllers provide pin multiplexing, drive strength and slew
   configuration, GPIO access, and one aggregated interrupt per GPIO bank.
   The number and width of banks are described by the GPIO child nodes.
+  GPIO range pin offsets are cumulative across the actual hsoc,npins bank
+  widths. Pinmux values retain the hardware bank stride and encode a pin as
+  bank times eight plus its offset within that bank.
 
 properties:
   compatible:

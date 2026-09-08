@@ -330,6 +330,42 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&uart3_pins>;
 	};
+
+	pinctrl_peri0: pinctrl@301e0000 {
+		compatible = "hsoc,peri0-pinctrl";
+		reg = <0x0 0x301e0000 0x0 0x10000>;
+		interrupts = <GIC_SPI 334 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 335 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 336 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 337 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 338 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 339 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 340 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 341 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 342 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 343 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 344 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 345 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 346 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 347 IRQ_TYPE_LEVEL_HIGH>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+	};
+
+	pinctrl_peri1: pinctrl@301f0000 {
+		compatible = "hsoc,peri1-pinctrl";
+		reg = <0x0 0x301f0000 0x0 0x10000>;
+		interrupts = <GIC_SPI 348 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 349 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 350 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 351 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 352 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 353 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 354 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 355 IRQ_TYPE_LEVEL_HIGH>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+	};
 };
 
 &si_cl1 {

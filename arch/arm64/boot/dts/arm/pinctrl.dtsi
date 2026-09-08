@@ -2,393 +2,359 @@
 
 #include <dt-bindings/pinctrl/hsoc.h>
 
-&soc {
-	pinctrl_peri0: pinctrl@301e0000 {
-		compatible = "hsoc,peri0-pinctrl";
-		reg = <0x0 0x301e0000 0x0 0x10000>;
-		interrupts = <GIC_SPI 334 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 335 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 336 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 337 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 338 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 339 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 340 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 341 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 342 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 343 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 344 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 345 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 346 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 347 IRQ_TYPE_LEVEL_HIGH>;
-		#address-cells = <1>;
-		#size-cells = <0>;
-
-		peri0_bank0: gpio@0 {
-			reg = <0>;
-			hsoc,npins = <8>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri0 0 0 8>;
-			gpio-line-names = "gp_peri0_0", "gp_peri0_1",
-					  "gp_peri0_2", "gp_peri0_3",
-					  "gp_peri0_4", "gp_peri0_5",
-					  "gp_peri0_6", "gp_peri0_7";
-		};
-
-		peri0_bank1: gpio@1 {
-			reg = <1>;
-			hsoc,npins = <8>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri0 0 8 8>;
-			gpio-line-names = "gp_peri0_8", "gp_peri0_9",
-					  "gp_peri0_10", "gp_peri0_11",
-					  "gp_peri0_12", "gp_peri0_13",
-					  "gp_peri0_14", "gp_peri0_15";
-		};
-
-		peri0_bank2: gpio@2 {
-			reg = <2>;
-			hsoc,npins = <8>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri0 0 16 8>;
-			gpio-line-names = "gp_peri0_16", "gp_peri0_17",
-					  "gp_peri0_18", "gp_peri0_19",
-					  "gp_peri0_20", "gp_peri0_21",
-					  "gp_peri0_22", "gp_peri0_23";
-		};
-
-		peri0_bank3: gpio@3 {
-			reg = <3>;
-			hsoc,npins = <8>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri0 0 24 8>;
-			gpio-line-names = "gp_peri0_24", "gp_peri0_25",
-					  "gp_peri0_26", "gp_peri0_27",
-					  "gp_peri0_28", "gp_peri0_29",
-					  "gp_peri0_30", "gp_peri0_31";
-		};
-
-		peri0_bank4: gpio@4 {
-			reg = <4>;
-			hsoc,npins = <8>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri0 0 32 8>;
-			gpio-line-names = "gp_peri0_32", "gp_peri0_33",
-					  "gp_peri0_34", "gp_peri0_35",
-					  "gp_peri0_36", "gp_peri0_37",
-					  "gp_peri0_38", "gp_peri0_39";
-		};
-
-		peri0_bank5: gpio@5 {
-			reg = <5>;
-			hsoc,npins = <8>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri0 0 40 8>;
-			gpio-line-names = "gp_peri0_40", "gp_peri0_41",
-					  "gp_peri0_42", "gp_peri0_43",
-					  "gp_peri0_44", "gp_peri0_45",
-					  "gp_peri0_46", "gp_peri0_47";
-		};
-
-		peri0_bank6: gpio@6 {
-			reg = <6>;
-			hsoc,npins = <1>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri0 0 48 1>;
-			gpio-line-names = "gp_peri0_48";
-		};
-
-		peri0_bank7: gpio@7 {
-			reg = <7>;
-			hsoc,npins = <1>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri0 0 56 1>;
-			gpio-line-names = "gp_peri0_49";
-		};
-
-		peri0_bank8: gpio@8 {
-			reg = <8>;
-			hsoc,npins = <1>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri0 0 64 1>;
-			gpio-line-names = "gp_peri0_50";
-		};
-
-		peri0_bank9: gpio@9 {
-			reg = <9>;
-			hsoc,npins = <1>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri0 0 72 1>;
-			gpio-line-names = "gp_peri0_51";
-		};
-
-		peri0_bank10: gpio@a {
-			reg = <10>;
-			hsoc,npins = <1>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri0 0 80 1>;
-			gpio-line-names = "gp_peri0_52";
-		};
-
-		peri0_bank11: gpio@b {
-			reg = <11>;
-			hsoc,npins = <1>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri0 0 88 1>;
-			gpio-line-names = "gp_peri0_53";
-		};
-
-		peri0_bank12: gpio@c {
-			reg = <12>;
-			hsoc,npins = <1>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri0 0 96 1>;
-			gpio-line-names = "gp_peri0_54";
-		};
-
-		peri0_bank13: gpio@d {
-			reg = <13>;
-			hsoc,npins = <1>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri0 0 104 1>;
-			gpio-line-names = "gp_peri0_55";
-		};
-
-		i2c0_pins: i2c0-pins {
-			pinmux = <HSOC_PINMUX(0, 0, 2)>, <HSOC_PINMUX(0, 1, 2)>;
-			drive-strength = <4>;
-			slew-rate = <0>;
-		};
-		i2c1_pins: i2c1-pins {
-			pinmux = <HSOC_PINMUX(0, 2, 2)>, <HSOC_PINMUX(0, 3, 2)>;
-			drive-strength = <4>;
-			slew-rate = <0>;
-		};
-		i2c2_pins: i2c2-pins {
-			pinmux = <HSOC_PINMUX(0, 4, 2)>, <HSOC_PINMUX(0, 5, 2)>;
-			drive-strength = <4>;
-			slew-rate = <0>;
-		};
-		i2c3_pins: i2c3-pins {
-			pinmux = <HSOC_PINMUX(0, 6, 2)>, <HSOC_PINMUX(0, 7, 2)>;
-			drive-strength = <4>;
-			slew-rate = <0>;
-		};
-		i2c4_pins: i2c4-pins {
-			pinmux = <HSOC_PINMUX(1, 0, 2)>, <HSOC_PINMUX(1, 1, 2)>;
-			drive-strength = <4>;
-			slew-rate = <0>;
-		};
-		i2c5_pins: i2c5-pins {
-			pinmux = <HSOC_PINMUX(1, 2, 2)>, <HSOC_PINMUX(1, 3, 2)>;
-			drive-strength = <4>;
-			slew-rate = <0>;
-		};
-
-		spi0_pins: spi0-pins {
-			pinmux = <HSOC_PINMUX(2, 0, 2)>, <HSOC_PINMUX(2, 1, 2)>,
-				 <HSOC_PINMUX(2, 2, 2)>, <HSOC_PINMUX(2, 3, 2)>;
-			drive-strength = <8>;
-			slew-rate = <1>;
-		};
-		spi1_pins: spi1-pins {
-			pinmux = <HSOC_PINMUX(2, 4, 2)>, <HSOC_PINMUX(2, 5, 2)>,
-				 <HSOC_PINMUX(2, 6, 2)>, <HSOC_PINMUX(2, 7, 2)>;
-			drive-strength = <8>;
-			slew-rate = <1>;
-		};
-
-		uart0_pins: uart0-pins {
-			pinmux = <HSOC_PINMUX(4, 0, 2)>, <HSOC_PINMUX(4, 1, 2)>;
-			drive-strength = <4>;
-			slew-rate = <0>;
-		};
-		uart1_pins: uart1-pins {
-			pinmux = <HSOC_PINMUX(4, 2, 2)>, <HSOC_PINMUX(4, 3, 2)>;
-			drive-strength = <4>;
-			slew-rate = <0>;
-		};
+&pinctrl_peri0 {
+	peri0_bank0: gpio@0 {
+		reg = <0>;
+		hsoc,npins = <8>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri0 0 0 8>;
+		gpio-line-names = "gp_peri0_0", "gp_peri0_1",
+				  "gp_peri0_2", "gp_peri0_3",
+				  "gp_peri0_4", "gp_peri0_5",
+				  "gp_peri0_6", "gp_peri0_7";
 	};
 
-	pinctrl_peri1: pinctrl@301f0000 {
-		compatible = "hsoc,peri1-pinctrl";
-		reg = <0x0 0x301f0000 0x0 0x10000>;
-		interrupts = <GIC_SPI 348 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 349 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 350 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 351 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 352 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 353 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 354 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 355 IRQ_TYPE_LEVEL_HIGH>;
-		#address-cells = <1>;
-		#size-cells = <0>;
+	peri0_bank1: gpio@1 {
+		reg = <1>;
+		hsoc,npins = <8>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri0 0 8 8>;
+		gpio-line-names = "gp_peri0_8", "gp_peri0_9",
+				  "gp_peri0_10", "gp_peri0_11",
+				  "gp_peri0_12", "gp_peri0_13",
+				  "gp_peri0_14", "gp_peri0_15";
+	};
 
-		peri1_bank0: gpio@0 {
-			reg = <0>;
-			hsoc,npins = <8>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri1 0 0 8>;
-			gpio-line-names = "gp_peri1_0", "gp_peri1_1",
-					  "gp_peri1_2", "gp_peri1_3",
-					  "gp_peri1_4", "gp_peri1_5",
-					  "gp_peri1_6", "gp_peri1_7";
-		};
+	peri0_bank2: gpio@2 {
+		reg = <2>;
+		hsoc,npins = <8>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri0 0 16 8>;
+		gpio-line-names = "gp_peri0_16", "gp_peri0_17",
+				  "gp_peri0_18", "gp_peri0_19",
+				  "gp_peri0_20", "gp_peri0_21",
+				  "gp_peri0_22", "gp_peri0_23";
+	};
 
-		peri1_bank1: gpio@1 {
-			reg = <1>;
-			hsoc,npins = <8>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri1 0 8 8>;
-			gpio-line-names = "gp_peri1_8", "gp_peri1_9",
-					  "gp_peri1_10", "gp_peri1_11",
-					  "gp_peri1_12", "gp_peri1_13",
-					  "gp_peri1_14", "gp_peri1_15";
-		};
+	peri0_bank3: gpio@3 {
+		reg = <3>;
+		hsoc,npins = <8>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri0 0 24 8>;
+		gpio-line-names = "gp_peri0_24", "gp_peri0_25",
+				  "gp_peri0_26", "gp_peri0_27",
+				  "gp_peri0_28", "gp_peri0_29",
+				  "gp_peri0_30", "gp_peri0_31";
+	};
 
-		peri1_bank2: gpio@2 {
-			reg = <2>;
-			hsoc,npins = <8>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri1 0 16 8>;
-			gpio-line-names = "gp_peri1_16", "gp_peri1_17",
-					  "gp_peri1_18", "gp_peri1_19",
-					  "gp_peri1_20", "gp_peri1_21",
-					  "gp_peri1_22", "gp_peri1_23";
-		};
+	peri0_bank4: gpio@4 {
+		reg = <4>;
+		hsoc,npins = <8>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri0 0 32 8>;
+		gpio-line-names = "gp_peri0_32", "gp_peri0_33",
+				  "gp_peri0_34", "gp_peri0_35",
+				  "gp_peri0_36", "gp_peri0_37",
+				  "gp_peri0_38", "gp_peri0_39";
+	};
 
-		peri1_bank3: gpio@3 {
-			reg = <3>;
-			hsoc,npins = <8>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri1 0 24 8>;
-			gpio-line-names = "gp_peri1_24", "gp_peri1_25",
-					  "gp_peri1_26", "gp_peri1_27",
-					  "gp_peri1_28", "gp_peri1_29",
-					  "gp_peri1_30", "gp_peri1_31";
-		};
+	peri0_bank5: gpio@5 {
+		reg = <5>;
+		hsoc,npins = <8>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri0 0 40 8>;
+		gpio-line-names = "gp_peri0_40", "gp_peri0_41",
+				  "gp_peri0_42", "gp_peri0_43",
+				  "gp_peri0_44", "gp_peri0_45",
+				  "gp_peri0_46", "gp_peri0_47";
+	};
 
-		peri1_bank4: gpio@4 {
-			reg = <4>;
-			hsoc,npins = <1>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri1 0 32 1>;
-			gpio-line-names = "gp_peri1_32";
-		};
+	peri0_bank6: gpio@6 {
+		reg = <6>;
+		hsoc,npins = <1>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri0 0 48 1>;
+		gpio-line-names = "gp_peri0_48";
+	};
 
-		peri1_bank5: gpio@5 {
-			reg = <5>;
-			hsoc,npins = <1>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri1 0 40 1>;
-			gpio-line-names = "gp_peri1_33";
-		};
+	peri0_bank7: gpio@7 {
+		reg = <7>;
+		hsoc,npins = <1>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri0 0 49 1>;
+		gpio-line-names = "gp_peri0_49";
+	};
 
-		peri1_bank6: gpio@6 {
-			reg = <6>;
-			hsoc,npins = <1>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri1 0 48 1>;
-			gpio-line-names = "gp_peri1_34";
-		};
+	peri0_bank8: gpio@8 {
+		reg = <8>;
+		hsoc,npins = <1>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri0 0 50 1>;
+		gpio-line-names = "gp_peri0_50";
+	};
 
-		peri1_bank7: gpio@7 {
-			reg = <7>;
-			hsoc,npins = <1>;
-			gpio-controller;
-			#gpio-cells = <2>;
-			interrupt-controller;
-			#interrupt-cells = <2>;
-			gpio-ranges = <&pinctrl_peri1 0 56 1>;
-			gpio-line-names = "gp_peri1_35";
-		};
+	peri0_bank9: gpio@9 {
+		reg = <9>;
+		hsoc,npins = <1>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri0 0 51 1>;
+		gpio-line-names = "gp_peri0_51";
+	};
 
-		spi2_pins: spi2-pins {
-			pinmux = <HSOC_PINMUX(0, 0, 2)>, <HSOC_PINMUX(0, 1, 2)>,
-				 <HSOC_PINMUX(0, 2, 2)>, <HSOC_PINMUX(0, 3, 2)>;
-			drive-strength = <8>;
-			slew-rate = <1>;
-		};
+	peri0_bank10: gpio@a {
+		reg = <10>;
+		hsoc,npins = <1>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri0 0 52 1>;
+		gpio-line-names = "gp_peri0_52";
+	};
 
-		spi3_pins: spi3-pins {
-			pinmux = <HSOC_PINMUX(0, 4, 2)>, <HSOC_PINMUX(0, 5, 2)>,
-				 <HSOC_PINMUX(0, 6, 2)>, <HSOC_PINMUX(0, 7, 2)>;
-			drive-strength = <8>;
-			slew-rate = <1>;
-		};
+	peri0_bank11: gpio@b {
+		reg = <11>;
+		hsoc,npins = <1>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri0 0 53 1>;
+		gpio-line-names = "gp_peri0_53";
+	};
 
-		uart2_pins: uart2-pins {
-			pinmux = <HSOC_PINMUX(1, 0, 2)>, <HSOC_PINMUX(1, 1, 2)>;
-			drive-strength = <4>;
-			slew-rate = <0>;
-		};
+	peri0_bank12: gpio@c {
+		reg = <12>;
+		hsoc,npins = <1>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri0 0 54 1>;
+		gpio-line-names = "gp_peri0_54";
+	};
 
-		uart3_pins: uart3-pins {
-			pinmux = <HSOC_PINMUX(1, 2, 2)>, <HSOC_PINMUX(1, 3, 2)>;
-			drive-strength = <4>;
-			slew-rate = <0>;
-		};
+	peri0_bank13: gpio@d {
+		reg = <13>;
+		hsoc,npins = <1>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri0 0 55 1>;
+		gpio-line-names = "gp_peri0_55";
+	};
+
+	i2c0_pins: i2c0-pins {
+		pinmux = <HSOC_PINMUX(0, 0, 2)>, <HSOC_PINMUX(0, 1, 2)>;
+		drive-strength = <4>;
+		slew-rate = <0>;
+	};
+	i2c1_pins: i2c1-pins {
+		pinmux = <HSOC_PINMUX(0, 2, 2)>, <HSOC_PINMUX(0, 3, 2)>;
+		drive-strength = <4>;
+		slew-rate = <0>;
+	};
+	i2c2_pins: i2c2-pins {
+		pinmux = <HSOC_PINMUX(0, 4, 2)>, <HSOC_PINMUX(0, 5, 2)>;
+		drive-strength = <4>;
+		slew-rate = <0>;
+	};
+	i2c3_pins: i2c3-pins {
+		pinmux = <HSOC_PINMUX(0, 6, 2)>, <HSOC_PINMUX(0, 7, 2)>;
+		drive-strength = <4>;
+		slew-rate = <0>;
+	};
+	i2c4_pins: i2c4-pins {
+		pinmux = <HSOC_PINMUX(1, 0, 2)>, <HSOC_PINMUX(1, 1, 2)>;
+		drive-strength = <4>;
+		slew-rate = <0>;
+	};
+	i2c5_pins: i2c5-pins {
+		pinmux = <HSOC_PINMUX(1, 2, 2)>, <HSOC_PINMUX(1, 3, 2)>;
+		drive-strength = <4>;
+		slew-rate = <0>;
+	};
+
+	spi0_pins: spi0-pins {
+		pinmux = <HSOC_PINMUX(2, 0, 2)>, <HSOC_PINMUX(2, 1, 2)>,
+			 <HSOC_PINMUX(2, 2, 2)>, <HSOC_PINMUX(2, 3, 2)>;
+		drive-strength = <8>;
+		slew-rate = <1>;
+	};
+	spi1_pins: spi1-pins {
+		pinmux = <HSOC_PINMUX(2, 4, 2)>, <HSOC_PINMUX(2, 5, 2)>,
+			 <HSOC_PINMUX(2, 6, 2)>, <HSOC_PINMUX(2, 7, 2)>;
+		drive-strength = <8>;
+		slew-rate = <1>;
+	};
+
+	uart0_pins: uart0-pins {
+		pinmux = <HSOC_PINMUX(4, 0, 2)>, <HSOC_PINMUX(4, 1, 2)>;
+		drive-strength = <4>;
+		slew-rate = <0>;
+	};
+	uart1_pins: uart1-pins {
+		pinmux = <HSOC_PINMUX(4, 2, 2)>, <HSOC_PINMUX(4, 3, 2)>;
+		drive-strength = <4>;
+		slew-rate = <0>;
+	};
+};
+
+&pinctrl_peri1 {
+	peri1_bank0: gpio@0 {
+		reg = <0>;
+		hsoc,npins = <8>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri1 0 0 8>;
+		gpio-line-names = "gp_peri1_0", "gp_peri1_1",
+				  "gp_peri1_2", "gp_peri1_3",
+				  "gp_peri1_4", "gp_peri1_5",
+				  "gp_peri1_6", "gp_peri1_7";
+	};
+
+	peri1_bank1: gpio@1 {
+		reg = <1>;
+		hsoc,npins = <8>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri1 0 8 8>;
+		gpio-line-names = "gp_peri1_8", "gp_peri1_9",
+				  "gp_peri1_10", "gp_peri1_11",
+				  "gp_peri1_12", "gp_peri1_13",
+				  "gp_peri1_14", "gp_peri1_15";
+	};
+
+	peri1_bank2: gpio@2 {
+		reg = <2>;
+		hsoc,npins = <8>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri1 0 16 8>;
+		gpio-line-names = "gp_peri1_16", "gp_peri1_17",
+				  "gp_peri1_18", "gp_peri1_19",
+				  "gp_peri1_20", "gp_peri1_21",
+				  "gp_peri1_22", "gp_peri1_23";
+	};
+
+	peri1_bank3: gpio@3 {
+		reg = <3>;
+		hsoc,npins = <8>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri1 0 24 8>;
+		gpio-line-names = "gp_peri1_24", "gp_peri1_25",
+				  "gp_peri1_26", "gp_peri1_27",
+				  "gp_peri1_28", "gp_peri1_29",
+				  "gp_peri1_30", "gp_peri1_31";
+	};
+
+	peri1_bank4: gpio@4 {
+		reg = <4>;
+		hsoc,npins = <1>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri1 0 32 1>;
+		gpio-line-names = "gp_peri1_32";
+	};
+
+	peri1_bank5: gpio@5 {
+		reg = <5>;
+		hsoc,npins = <1>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri1 0 33 1>;
+		gpio-line-names = "gp_peri1_33";
+	};
+
+	peri1_bank6: gpio@6 {
+		reg = <6>;
+		hsoc,npins = <1>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri1 0 34 1>;
+		gpio-line-names = "gp_peri1_34";
+	};
+
+	peri1_bank7: gpio@7 {
+		reg = <7>;
+		hsoc,npins = <1>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		interrupt-controller;
+		#interrupt-cells = <2>;
+		gpio-ranges = <&pinctrl_peri1 0 35 1>;
+		gpio-line-names = "gp_peri1_35";
+	};
+
+	spi2_pins: spi2-pins {
+		pinmux = <HSOC_PINMUX(0, 0, 2)>, <HSOC_PINMUX(0, 1, 2)>,
+			 <HSOC_PINMUX(0, 2, 2)>, <HSOC_PINMUX(0, 3, 2)>;
+		drive-strength = <8>;
+		slew-rate = <1>;
+	};
+
+	spi3_pins: spi3-pins {
+		pinmux = <HSOC_PINMUX(0, 4, 2)>, <HSOC_PINMUX(0, 5, 2)>,
+			 <HSOC_PINMUX(0, 6, 2)>, <HSOC_PINMUX(0, 7, 2)>;
+		drive-strength = <8>;
+		slew-rate = <1>;
+	};
+
+	uart2_pins: uart2-pins {
+		pinmux = <HSOC_PINMUX(1, 0, 2)>, <HSOC_PINMUX(1, 1, 2)>;
+		drive-strength = <4>;
+		slew-rate = <0>;
+	};
+
+	uart3_pins: uart3-pins {
+		pinmux = <HSOC_PINMUX(1, 2, 2)>, <HSOC_PINMUX(1, 3, 2)>;
+		drive-strength = <4>;
+		slew-rate = <0>;
 	};
 };

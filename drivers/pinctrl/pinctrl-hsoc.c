@@ -52,6 +52,7 @@ struct hsoc_gpio_bank {
 	struct gpio_chip gc;
 	void __iomem *base;
 	unsigned int index;
+	unsigned int pin_base;
 	unsigned int npins;
 	int parent_irq;
 };
@@ -78,11 +79,36 @@ static const char * const hsoc_functions[] = {
 
 static int hsoc_pin_to_group(struct hsoc_pinctrl *pctl, unsigned int pin)
 {
+	return pin < pctl->desc.npins ? pin : -EINVAL;
+}
+
+static int hsoc_hw_pin_to_pin(struct hsoc_pinctrl *pctl, unsigned int hw_pin)
+{
+	unsigned int bank = hw_pin / 8;
+	unsigned int offset = hw_pin % 8;
+
+	if (bank >= pctl->nbanks || offset >= pctl->banks[bank].npins)
+		return -EINVAL;
+
+	return pctl->banks[bank].pin_base + offset;
+}
+
+static int hsoc_pin_to_bank(struct hsoc_pinctrl *pctl, unsigned int pin,
+			    struct hsoc_gpio_bank **bank,
+			    unsigned int *offset)
+{
 	unsigned int i;
 
-	for (i = 0; i < pctl->desc.npins; i++)
-		if (pctl->pins[i].number == pin)
-			return i;
+	if (pin >= pctl->npins)
+		return -EINVAL;
+
+	for (i = 0; i < pctl->nbanks; i++) {
+		if (pin < pctl->banks[i].pin_base + pctl->banks[i].npins) {
+			*bank = &pctl->banks[i];
+			*offset = pin - pctl->banks[i].pin_base;
+			return 0;
+		}
+	}
 
 	return -EINVAL;
 }
@@ -103,14 +129,15 @@ static void hsoc_update_bits(struct hsoc_pinctrl *pctl, void __iomem *reg,
 static int hsoc_set_pin_mux(struct hsoc_pinctrl *pctl, unsigned int pin,
 			    unsigned int mux)
 {
-	unsigned int bank = pin / 8;
-	unsigned int offset = pin % 8;
+	struct hsoc_gpio_bank *bank;
+	unsigned int offset;
+	int ret;
 
-	if (mux >= HSOC_NUM_FUNCTIONS || bank >= pctl->nbanks ||
-	    offset >= pctl->banks[bank].npins)
+	ret = hsoc_pin_to_bank(pctl, pin, &bank, &offset);
+	if (ret || mux >= HSOC_NUM_FUNCTIONS)
 		return -EINVAL;
 
-	hsoc_update_bits(pctl, pctl->base + HSOC_BANK_BASE(bank) +
+	hsoc_update_bits(pctl, bank->base +
 			 HSOC_BANK_PIN_CONFIG(offset),
 		HSOC_PIN_MUX, FIELD_PREP(HSOC_PIN_MUX, mux));
 
@@ -173,15 +200,20 @@ static int hsoc_dt_node_to_map(struct pinctrl_dev *pctldev,
 		goto out;
 
 	for (i = 0; i < count; i++) {
-		u32 value, pin, function;
+		u32 value, function;
+		int pin;
 		int group;
 
 		ret = of_property_read_u32_index(np, "pinmux", i, &value);
 		if (ret)
 			goto free_map;
 
-		pin = value >> 8;
+		pin = hsoc_hw_pin_to_pin(pctl, value >> 8);
 		function = value & 0xff;
+		if (pin < 0) {
+			ret = pin;
+			goto free_map;
+		}
 		group = hsoc_pin_to_group(pctl, pin);
 		if (group < 0 || function >= HSOC_NUM_FUNCTIONS) {
 			ret = -EINVAL;
@@ -294,13 +326,14 @@ static int hsoc_pin_config_get(struct pinctrl_dev *pctldev, unsigned int pin,
 			       unsigned long *config)
 {
 	struct hsoc_pinctrl *pctl = pinctrl_dev_get_drvdata(pctldev);
+	struct hsoc_gpio_bank *bank;
+	unsigned int offset;
 	u32 value, arg;
 
-	if (hsoc_pin_to_group(pctl, pin) < 0)
+	if (hsoc_pin_to_bank(pctl, pin, &bank, &offset))
 		return -EINVAL;
 
-	value = readl(pctl->base + HSOC_BANK_BASE(pin / 8) +
-		      HSOC_BANK_PIN_CONFIG(pin % 8));
+	value = readl(bank->base + HSOC_BANK_PIN_CONFIG(offset));
 	switch (pinconf_to_config_param(*config)) {
 	case PIN_CONFIG_DRIVE_STRENGTH:
 		arg = FIELD_GET(HSOC_PIN_DRIVE, value);
@@ -327,16 +360,17 @@ static int hsoc_pin_config_set(struct pinctrl_dev *pctldev, unsigned int pin,
 			       unsigned int num_configs)
 {
 	struct hsoc_pinctrl *pctl = pinctrl_dev_get_drvdata(pctldev);
+	struct hsoc_gpio_bank *bank;
+	unsigned int offset;
 	void __iomem *reg;
 	unsigned long flags;
 	u32 value;
 	unsigned int i;
 
-	if (hsoc_pin_to_group(pctl, pin) < 0)
+	if (hsoc_pin_to_bank(pctl, pin, &bank, &offset))
 		return -EINVAL;
 
-	reg = pctl->base + HSOC_BANK_BASE(pin / 8) +
-	      HSOC_BANK_PIN_CONFIG(pin % 8);
+	reg = bank->base + HSOC_BANK_PIN_CONFIG(offset);
 	raw_spin_lock_irqsave(&pctl->lock, flags);
 	value = readl(reg);
 	for (i = 0; i < num_configs; i++) {
@@ -419,7 +453,7 @@ static int hsoc_gpio_direction_input(struct gpio_chip *gc, unsigned int offset)
 {
 	struct hsoc_gpio_bank *bank = gpiochip_get_data(gc);
 
-	return hsoc_set_pin_mux(bank->pctl, bank->index * 8 + offset, 0);
+	return hsoc_set_pin_mux(bank->pctl, bank->pin_base + offset, 0);
 }
 
 static int hsoc_gpio_set(struct gpio_chip *gc, unsigned int offset, int value)
@@ -437,7 +471,7 @@ static int hsoc_gpio_direction_output(struct gpio_chip *gc, unsigned int offset,
 	struct hsoc_gpio_bank *bank = gpiochip_get_data(gc);
 
 	hsoc_gpio_set(gc, offset, value);
-	return hsoc_set_pin_mux(bank->pctl, bank->index * 8 + offset, 1);
+	return hsoc_set_pin_mux(bank->pctl, bank->pin_base + offset, 1);
 }
 
 static int hsoc_gpio_get(struct gpio_chip *gc, unsigned int offset)
@@ -619,18 +653,18 @@ static int hsoc_init_pins(struct hsoc_pinctrl *pctl)
 		return -ENOMEM;
 
 	for (bank = 0; bank < pctl->nbanks; bank++) {
+		pctl->banks[bank].pin_base = i;
 		for (pin = 0; pin < pctl->banks[bank].npins; pin++, i++) {
-			unsigned int number = bank * 8 + pin;
 			const char *name;
 
 			name = devm_kasprintf(dev, GFP_KERNEL, "%s_bank%u_pin%u",
 					      pctl->instance, bank, pin);
 			if (!name)
 				return -ENOMEM;
-			pctl->pins[i].number = number;
+			pctl->pins[i].number = i;
 			pctl->pins[i].name = name;
 			pctl->groups[i] = name;
-			pctl->group_pins[i] = number;
+			pctl->group_pins[i] = i;
 		}
 	}
 
