@@ -177,57 +177,57 @@
 
 	i2c0_pins: i2c0-pins {
 		pinmux = <HSOC_PINMUX(0, 0, 2)>, <HSOC_PINMUX(0, 1, 2)>;
-		drive-strength = <4>;
-		slew-rate = <0>;
+		hsoc,drive-strength = <1>;
+		input-enable;
 	};
 	i2c1_pins: i2c1-pins {
 		pinmux = <HSOC_PINMUX(0, 2, 2)>, <HSOC_PINMUX(0, 3, 2)>;
-		drive-strength = <4>;
-		slew-rate = <0>;
+		hsoc,drive-strength = <1>;
+		input-enable;
 	};
 	i2c2_pins: i2c2-pins {
 		pinmux = <HSOC_PINMUX(0, 4, 2)>, <HSOC_PINMUX(0, 5, 2)>;
-		drive-strength = <4>;
-		slew-rate = <0>;
+		hsoc,drive-strength = <1>;
+		input-enable;
 	};
 	i2c3_pins: i2c3-pins {
 		pinmux = <HSOC_PINMUX(0, 6, 2)>, <HSOC_PINMUX(0, 7, 2)>;
-		drive-strength = <4>;
-		slew-rate = <0>;
+		hsoc,drive-strength = <1>;
+		input-enable;
 	};
 	i2c4_pins: i2c4-pins {
 		pinmux = <HSOC_PINMUX(1, 0, 2)>, <HSOC_PINMUX(1, 1, 2)>;
-		drive-strength = <4>;
-		slew-rate = <0>;
+		hsoc,drive-strength = <1>;
+		input-enable;
 	};
 	i2c5_pins: i2c5-pins {
 		pinmux = <HSOC_PINMUX(1, 2, 2)>, <HSOC_PINMUX(1, 3, 2)>;
-		drive-strength = <4>;
-		slew-rate = <0>;
+		hsoc,drive-strength = <1>;
+		input-enable;
 	};
 
 	spi0_pins: spi0-pins {
 		pinmux = <HSOC_PINMUX(2, 0, 2)>, <HSOC_PINMUX(2, 1, 2)>,
 			 <HSOC_PINMUX(2, 2, 2)>, <HSOC_PINMUX(2, 3, 2)>;
-		drive-strength = <8>;
-		slew-rate = <1>;
+		hsoc,drive-strength = <3>;
+		input-enable;
 	};
 	spi1_pins: spi1-pins {
 		pinmux = <HSOC_PINMUX(2, 4, 2)>, <HSOC_PINMUX(2, 5, 2)>,
 			 <HSOC_PINMUX(2, 6, 2)>, <HSOC_PINMUX(2, 7, 2)>;
-		drive-strength = <8>;
-		slew-rate = <1>;
+		hsoc,drive-strength = <3>;
+		input-enable;
 	};
 
 	uart0_pins: uart0-pins {
 		pinmux = <HSOC_PINMUX(4, 0, 2)>, <HSOC_PINMUX(4, 1, 2)>;
-		drive-strength = <4>;
-		slew-rate = <0>;
+		hsoc,drive-strength = <1>;
+		input-enable;
 	};
 	uart1_pins: uart1-pins {
 		pinmux = <HSOC_PINMUX(4, 2, 2)>, <HSOC_PINMUX(4, 3, 2)>;
-		drive-strength = <4>;
-		slew-rate = <0>;
+		hsoc,drive-strength = <1>;
+		input-enable;
 	};
 };
 
@@ -335,26 +335,26 @@
 	spi2_pins: spi2-pins {
 		pinmux = <HSOC_PINMUX(0, 0, 2)>, <HSOC_PINMUX(0, 1, 2)>,
 			 <HSOC_PINMUX(0, 2, 2)>, <HSOC_PINMUX(0, 3, 2)>;
-		drive-strength = <8>;
-		slew-rate = <1>;
+		hsoc,drive-strength = <3>;
+		input-enable;
 	};
 
 	spi3_pins: spi3-pins {
 		pinmux = <HSOC_PINMUX(0, 4, 2)>, <HSOC_PINMUX(0, 5, 2)>,
 			 <HSOC_PINMUX(0, 6, 2)>, <HSOC_PINMUX(0, 7, 2)>;
-		drive-strength = <8>;
-		slew-rate = <1>;
+		hsoc,drive-strength = <3>;
+		input-enable;
 	};
 
 	uart2_pins: uart2-pins {
 		pinmux = <HSOC_PINMUX(1, 0, 2)>, <HSOC_PINMUX(1, 1, 2)>;
-		drive-strength = <4>;
-		slew-rate = <0>;
+		hsoc,drive-strength = <1>;
+		input-enable;
 	};
 
 	uart3_pins: uart3-pins {
 		pinmux = <HSOC_PINMUX(1, 2, 2)>, <HSOC_PINMUX(1, 3, 2)>;
-		drive-strength = <4>;
-		slew-rate = <0>;
+		hsoc,drive-strength = <1>;
+		input-enable;
 	};
 };

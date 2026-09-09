@@ -331,8 +331,8 @@
 		pinctrl-0 = <&uart3_pins>;
 	};
 
-	pinctrl_peri0: pinctrl@301e0000 {
-		compatible = "hsoc,peri0-pinctrl";
+	pinctrl_peri0: gpio@301e0000 {
+		compatible = "hsoc,peri0-gpio";
 		reg = <0x0 0x301e0000 0x0 0x10000>;
 		interrupts = <GIC_SPI 334 IRQ_TYPE_LEVEL_HIGH>,
 			     <GIC_SPI 335 IRQ_TYPE_LEVEL_HIGH>,
@@ -352,8 +352,8 @@
 		#size-cells = <0>;
 	};
 
-	pinctrl_peri1: pinctrl@301f0000 {
-		compatible = "hsoc,peri1-pinctrl";
+	pinctrl_peri1: gpio@301f0000 {
+		compatible = "hsoc,peri1-gpio";
 		reg = <0x0 0x301f0000 0x0 0x10000>;
 		interrupts = <GIC_SPI 348 IRQ_TYPE_LEVEL_HIGH>,
 			     <GIC_SPI 349 IRQ_TYPE_LEVEL_HIGH>,
