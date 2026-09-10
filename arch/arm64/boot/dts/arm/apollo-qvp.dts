@@ -101,7 +101,6 @@
 			     <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>,
 			     <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>;
 		#dma-cells = <1>;
-		dma-coherent;
 	};
 
 	dw_i2c0: i2c@30100000 {
