@@ -26,9 +26,9 @@ properties:
 
   interrupts:
     description: |
-      The interrupt line number for the I2S controller. Add this
-      parameter if the I2S controller that you are using does not
-      support DMA.
+      The interrupt line number for the I2S controller. This is required for
+      PIO operation and may be provided with DMA channels to report FIFO
+      errors.
     maxItems: 1
 
   clocks:
@@ -175,7 +175,7 @@ required:
   - clocks
   - clock-names
 
-oneOf:
+anyOf:
   - required:
       - dmas
       - dma-names

@@ -21,6 +21,7 @@
 #include <linux/reset.h>
 #include <linux/slab.h>
 #include <linux/pm_runtime.h>
+#include <linux/property.h>
 #include <sound/designware_i2s.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
@@ -90,12 +91,14 @@ static inline void i2s_enable_irqs(struct dw_i2s_dev *dev, u32 stream,
 	if (stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		for (i = 0; i < (chan_nr / 2); i++) {
 			irq = i2s_read_reg(dev->i2s_base, IMR(i));
-			i2s_write_reg(dev->i2s_base, IMR(i), irq & ~0x30);
+			i2s_write_reg(dev->i2s_base, IMR(i),
+				      irq & ~(dev->use_pio ? 0x30 : 0x20));
 		}
 	} else {
 		for (i = 0; i < (chan_nr / 2); i++) {
 			irq = i2s_read_reg(dev->i2s_base, IMR(i));
-			i2s_write_reg(dev->i2s_base, IMR(i), irq & ~0x03);
+			i2s_write_reg(dev->i2s_base, IMR(i),
+				      irq & ~(dev->use_pio ? 0x03 : 0x02));
 		}
 	}
 }
@@ -1011,7 +1014,8 @@ static int dw_i2s_probe(struct platform_device *pdev)
 	}
 
 	if (!pdata || dev->is_jh7110) {
-		if (irq >= 0) {
+		if (irq >= 0 &&
+		    !device_property_present(&pdev->dev, "dmas")) {
 			ret = dw_pcm_register(pdev);
 			dev->use_pio = true;
 			dev->l_reg = LRBR_LTHR(0);
