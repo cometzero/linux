@@ -625,6 +625,7 @@ static int d350_probe(struct platform_device *pdev)
 		reg = readl_relaxed(dch->base + CH_BUILDCFG0);
 		dch->tsz = FIELD_GET(CH_CFG_DATA_WIDTH, reg);
 
+		dch->coherent = coherent;
 		reg = FIELD_PREP(CH_LINK_SHAREATTR, coherent ? SHAREATTR_ISH : SHAREATTR_OSH);
 		reg |= FIELD_PREP(CH_LINK_MEMATTR, coherent ? MEMATTR_WB : MEMATTR_NC);
 		writel_relaxed(reg, dch->base + CH_LINKATTR);
