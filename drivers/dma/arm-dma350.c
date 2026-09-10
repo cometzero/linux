@@ -3,13 +3,17 @@
 // Arm DMA-350 driver
 
 #include <linux/bitfield.h>
+#include <linux/delay.h>
 #include <linux/dmaengine.h>
 #include <linux/dma-mapping.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
+#include <linux/log2.h>
 #include <linux/of.h>
+#include <linux/of_dma.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/scatterlist.h>
 
 #include "dmaengine.h"
 #include "virt-dma.h"
@@ -55,10 +59,12 @@
 #define CH_STAT_DISABLED	BIT(18)
 #define CH_STAT_ERR		BIT(17)
 #define CH_STAT_DONE		BIT(16)
+#define CH_STAT_INTR_STOPPED	BIT(3)
 #define CH_STAT_INTR_ERR	BIT(1)
 #define CH_STAT_INTR_DONE	BIT(0)
 
 #define CH_INTREN		0x08
+#define CH_INTREN_STOPPED	BIT(3)
 #define CH_INTREN_ERR		BIT(1)
 #define CH_INTREN_DONE		BIT(0)
 
@@ -103,6 +109,11 @@
 #define CH_FILLVAL		0x38
 #define CH_SRCTRIGINCFG		0x4c
 #define CH_DESTRIGINCFG		0x50
+#define CH_TRIGIN_MODE		GENMASK(11, 10)
+#define CH_TRIGIN_MODE_DMA_FLOW	2
+#define CH_TRIGIN_MODE_PERIPH_FLOW 3
+#define CH_TRIGIN_TYPE		GENMASK(9, 8)
+#define CH_TRIGIN_SEL		GENMASK(7, 0)
 #define CH_LINKATTR		0x70
 #define CH_LINK_SHAREATTR	GENMASK(9, 8)
 #define CH_LINK_MEMATTR		GENMASK(7, 0)
@@ -181,20 +192,25 @@ struct d350_desc {
 	u16 xsize;
 	u16 xsizehi;
 	u8 tsz;
+	struct d350_desc *next;
 };
 
 struct d350_chan {
 	struct virt_dma_chan vc;
 	struct d350_desc *desc;
+	struct d350_desc *cmd;
 	void __iomem *base;
 	int irq;
 	enum dma_status status;
 	dma_cookie_t cookie;
 	u32 residue;
+	struct dma_slave_config cfg;
+	int request;
 	u8 tsz;
 	bool has_trig;
 	bool has_wrap;
 	bool coherent;
+	bool stopping;
 };
 
 struct d350 {
@@ -299,6 +315,129 @@ static struct dma_async_tx_descriptor *d350_prep_memset(struct dma_chan *chan,
 	return vchan_tx_prep(&dch->vc, &desc->vd, flags);
 }
 
+static int d350_config(struct dma_chan *chan, struct dma_slave_config *cfg)
+{
+	struct d350_chan *dch = to_d350_chan(chan);
+	enum dma_slave_buswidth width;
+
+	if (cfg->direction == DMA_MEM_TO_DEV)
+		width = cfg->dst_addr_width;
+	else if (cfg->direction == DMA_DEV_TO_MEM)
+		width = cfg->src_addr_width;
+	else
+		return -EINVAL;
+
+	if (!is_power_of_2(width) || width > BIT(dch->tsz))
+		return -EINVAL;
+
+	dch->cfg = *cfg;
+	return 0;
+}
+
+static int d350_build_slave_cmd(struct d350_chan *dch,
+				struct d350_desc *desc, dma_addr_t mem, u32 len,
+				enum dma_transfer_direction direction)
+{
+	struct dma_slave_config *cfg = &dch->cfg;
+	enum dma_slave_buswidth width;
+	unsigned int mode;
+	dma_addr_t src, dest;
+	u32 ctrl, trigin, *cmd = desc->command;
+
+	if (direction == DMA_MEM_TO_DEV) {
+		width = cfg->dst_addr_width;
+		src = mem;
+		dest = cfg->dst_addr;
+		ctrl = CH_CTRL_USEDESTRIGIN;
+	} else if (direction == DMA_DEV_TO_MEM) {
+		width = cfg->src_addr_width;
+		src = cfg->src_addr;
+		dest = mem;
+		ctrl = CH_CTRL_USESRCTRIGIN;
+	} else {
+		return -EINVAL;
+	}
+
+	if (!is_power_of_2(width) || width > BIT(dch->tsz) ||
+	    !IS_ALIGNED(mem | len, width))
+		return -EINVAL;
+
+	desc->tsz = __ffs(width);
+	desc->xsize = lower_16_bits(len >> desc->tsz);
+	desc->xsizehi = upper_16_bits(len >> desc->tsz);
+	mode = cfg->device_fc ? CH_TRIGIN_MODE_PERIPH_FLOW :
+				CH_TRIGIN_MODE_DMA_FLOW;
+	trigin = FIELD_PREP(CH_TRIGIN_MODE, mode) |
+		 FIELD_PREP(CH_TRIGIN_TYPE, 2) |
+		 FIELD_PREP(CH_TRIGIN_SEL, dch->request);
+
+	cmd[0] = LINK_CTRL | LINK_SRCADDR | LINK_SRCADDRHI | LINK_DESADDR |
+		 LINK_DESADDRHI | LINK_XSIZE | LINK_XSIZEHI | LINK_SRCTRANSCFG |
+		 LINK_DESTRANSCFG | LINK_XADDRINC | LINK_LINKADDR;
+	if (direction == DMA_MEM_TO_DEV)
+		cmd[0] |= LINK_DESTRIGINCFG;
+	else
+		cmd[0] |= LINK_SRCTRIGINCFG;
+	cmd[1] = ctrl | FIELD_PREP(CH_CTRL_TRANSIZE, desc->tsz) |
+		 FIELD_PREP(CH_CTRL_XTYPE, CH_CTRL_XTYPE_CONTINUE) |
+		 FIELD_PREP(CH_CTRL_DONETYPE, CH_CTRL_DONETYPE_CMD);
+	cmd[2] = lower_32_bits(src);
+	cmd[3] = upper_32_bits(src);
+	cmd[4] = lower_32_bits(dest);
+	cmd[5] = upper_32_bits(dest);
+	cmd[6] = FIELD_PREP(CH_XY_SRC, desc->xsize) |
+		 FIELD_PREP(CH_XY_DES, desc->xsize);
+	cmd[7] = FIELD_PREP(CH_XY_SRC, desc->xsizehi) |
+		 FIELD_PREP(CH_XY_DES, desc->xsizehi);
+	cmd[8] = direction == DMA_MEM_TO_DEV ?
+		(dch->coherent ? TRANSCFG_WB : TRANSCFG_NC) : TRANSCFG_DEVICE;
+	cmd[9] = direction == DMA_MEM_TO_DEV ?
+		TRANSCFG_DEVICE : (dch->coherent ? TRANSCFG_WB : TRANSCFG_NC);
+	cmd[10] = direction == DMA_MEM_TO_DEV ?
+		FIELD_PREP(CH_XY_SRC, 1) : FIELD_PREP(CH_XY_DES, 1);
+	cmd[11] = trigin;
+
+	return 0;
+}
+
+static struct dma_async_tx_descriptor *
+d350_prep_slave_sg(struct dma_chan *chan, struct scatterlist *sgl,
+		   unsigned int sg_len, enum dma_transfer_direction direction,
+		   unsigned long flags, void *context)
+{
+	struct d350_chan *dch = to_d350_chan(chan);
+	struct d350_desc *desc;
+	struct scatterlist *sg;
+	unsigned int i;
+	u32 total = 0;
+
+	if (dch->request < 0 || !dch->has_trig || !sg_len)
+		return NULL;
+
+	desc = kcalloc(sg_len, sizeof(*desc), GFP_NOWAIT);
+	if (!desc)
+		return NULL;
+
+	for_each_sg(sgl, sg, sg_len, i) {
+		u32 len = sg_dma_len(sg);
+
+		if (!len || total > U32_MAX - len)
+			goto err_free;
+		if (d350_build_slave_cmd(dch, &desc[i], sg_dma_address(sg),
+					 len, direction))
+			goto err_free;
+		total += len;
+		if (i + 1 < sg_len)
+			desc[i].next = &desc[i + 1];
+	}
+
+	return vchan_tx_prep(&dch->vc, &desc->vd, flags);
+
+err_free:
+	kfree(desc);
+	return NULL;
+}
+
 static int d350_pause(struct dma_chan *chan)
 {
 	struct d350_chan *dch = to_d350_chan(chan);
@@ -348,8 +487,12 @@ static int d350_resume(struct dma_chan *chan)
 
 static u32 d350_get_residue(struct d350_chan *dch)
 {
+	struct d350_desc *desc = dch->cmd;
 	u32 res, xsize, xsizehi, hi_new;
 	int retries = 3; /* 1st time unlucky, 2nd improbable, 3rd just broken */
+
+	if (!desc)
+		return dch->residue;
 
 	hi_new = readl_relaxed(dch->base + CH_XSIZEHI);
 	do {
@@ -360,8 +503,47 @@ static u32 d350_get_residue(struct d350_chan *dch)
 
 	res = FIELD_GET(CH_XY_DES, xsize);
 	res |= FIELD_GET(CH_XY_DES, xsizehi) << 16;
+	res <<= desc->tsz;
+	for (desc = desc->next; desc; desc = desc->next)
+		res += ((u32)desc->xsizehi << 16 | desc->xsize) << desc->tsz;
 
-	return res << dch->desc->tsz;
+	return res;
+}
+
+static int d350_stop(struct d350_chan *dch)
+{
+	u32 command, status;
+	int ret;
+
+	writel_relaxed(CH_INTREN_STOPPED | CH_INTREN_DONE | CH_INTREN_ERR,
+		       dch->base + CH_INTREN);
+	writel_relaxed(CH_CMD_STOP, dch->base + CH_CMD);
+	ret = readl_poll_timeout_atomic(dch->base + CH_CMD,
+					command,
+					!(command & CH_CMD_ENABLE),
+			1, D350_STATE_POLL_US);
+	if (ret)
+		return ret;
+
+	status = readl_relaxed(dch->base + CH_STATUS);
+	if (status & (CH_STAT_INTR_STOPPED | CH_STAT_INTR_DONE |
+		      CH_STAT_INTR_ERR))
+		writel_relaxed(status, dch->base + CH_STATUS);
+
+	return 0;
+}
+
+static void d350_start_next(struct d350_chan *dch);
+
+/* dch->vc.lock must be held after hardware is quiescent. */
+static void d350_finish_terminate(struct d350_chan *dch)
+{
+	dch->desc = NULL;
+	dch->cmd = NULL;
+	dch->status = DMA_COMPLETE;
+	dch->stopping = false;
+
+	d350_start_next(dch);
 }
 
 static int d350_terminate_all(struct dma_chan *chan)
@@ -369,25 +551,51 @@ static int d350_terminate_all(struct dma_chan *chan)
 	struct d350_chan *dch = to_d350_chan(chan);
 	unsigned long flags;
 	LIST_HEAD(list);
+	bool active;
+	int ret;
 
 	spin_lock_irqsave(&dch->vc.lock, flags);
-	writel_relaxed(CH_CMD_STOP, dch->base + CH_CMD);
-	if (dch->desc) {
-		if (dch->status != DMA_ERROR)
-			vchan_terminate_vdesc(&dch->desc->vd);
-		dch->desc = NULL;
-		dch->status = DMA_COMPLETE;
-	}
+	active = dch->desc;
+	if (dch->desc && !dch->stopping)
+		vchan_terminate_vdesc(&dch->desc->vd);
 	vchan_get_all_descriptors(&dch->vc, &list);
 	list_splice_tail(&list, &dch->vc.desc_terminated);
+	if (!active) {
+		d350_finish_terminate(dch);
+	} else {
+		ret = d350_stop(dch);
+		if (ret)
+			dch->stopping = true;
+		else
+			d350_finish_terminate(dch);
+	}
 	spin_unlock_irqrestore(&dch->vc.lock, flags);
 
+	/*
+	 * terminate_async() permits the physical stop to complete later.
+	 * d350_synchronize() waits for it before terminated descriptors are
+	 * released.
+	 */
 	return 0;
 }
 
 static void d350_synchronize(struct dma_chan *chan)
 {
 	struct d350_chan *dch = to_d350_chan(chan);
+	unsigned long flags;
+	bool stopping;
+
+	do {
+		spin_lock_irqsave(&dch->vc.lock, flags);
+		stopping = dch->stopping;
+		if (stopping && !d350_stop(dch)) {
+			d350_finish_terminate(dch);
+			stopping = false;
+		}
+		spin_unlock_irqrestore(&dch->vc.lock, flags);
+		if (stopping)
+			usleep_range(100, 200);
+	} while (stopping);
 
 	vchan_synchronize(&dch->vc);
 }
@@ -395,6 +603,16 @@ static void d350_synchronize(struct dma_chan *chan)
 static u32 d350_desc_bytes(struct d350_desc *desc)
 {
 	return ((u32)desc->xsizehi << 16 | desc->xsize) << desc->tsz;
+}
+
+static u32 d350_desc_chain_bytes(struct d350_desc *desc)
+{
+	u32 bytes = 0;
+
+	for (; desc; desc = desc->next)
+		bytes += d350_desc_bytes(desc);
+
+	return bytes;
 }
 
 static enum dma_status d350_tx_status(struct dma_chan *chan, dma_cookie_t cookie,
@@ -415,7 +633,7 @@ static enum dma_status d350_tx_status(struct dma_chan *chan, dma_cookie_t cookie
 			dch->residue = d350_get_residue(dch);
 		residue = dch->residue;
 	} else if ((vd = vchan_find_desc(&dch->vc, cookie))) {
-		residue = d350_desc_bytes(to_d350_desc(vd));
+		residue = d350_desc_chain_bytes(to_d350_desc(vd));
 	} else if (status == DMA_IN_PROGRESS) {
 		/* Somebody else terminated it? */
 		status = DMA_ERROR;
@@ -426,21 +644,10 @@ static enum dma_status d350_tx_status(struct dma_chan *chan, dma_cookie_t cookie
 	return status;
 }
 
-static void d350_start_next(struct d350_chan *dch)
+static void d350_program_cmd(struct d350_chan *dch)
 {
-	u32 hdr, *reg;
-
-	dch->desc = to_d350_desc(vchan_next_desc(&dch->vc));
-	if (!dch->desc)
-		return;
-
-	list_del(&dch->desc->vd.node);
-	dch->status = DMA_IN_PROGRESS;
-	dch->cookie = dch->desc->vd.tx.cookie;
-	dch->residue = d350_desc_bytes(dch->desc);
-
-	hdr = dch->desc->command[0];
-	reg = &dch->desc->command[1];
+	u32 hdr = dch->cmd->command[0];
+	u32 *reg = &dch->cmd->command[1];
 
 	if (hdr & LINK_INTREN)
 		writel_relaxed(*reg++, dch->base + CH_INTREN);
@@ -480,13 +687,30 @@ static void d350_start_next(struct d350_chan *dch)
 	writel(CH_CMD_ENABLE, dch->base + CH_CMD);
 }
 
+static void d350_start_next(struct d350_chan *dch)
+{
+	struct virt_dma_desc *vd = vchan_next_desc(&dch->vc);
+
+	if (!vd)
+		return;
+
+	dch->desc = to_d350_desc(vd);
+	list_del(&vd->node);
+	dch->cmd = dch->desc;
+	dch->status = DMA_IN_PROGRESS;
+	dch->cookie = vd->tx.cookie;
+	dch->residue = d350_desc_chain_bytes(dch->desc);
+	writel_relaxed(CH_INTREN_DONE | CH_INTREN_ERR, dch->base + CH_INTREN);
+	d350_program_cmd(dch);
+}
+
 static void d350_issue_pending(struct dma_chan *chan)
 {
 	struct d350_chan *dch = to_d350_chan(chan);
 	unsigned long flags;
 
 	spin_lock_irqsave(&dch->vc.lock, flags);
-	if (vchan_issue_pending(&dch->vc) && !dch->desc)
+	if (vchan_issue_pending(&dch->vc) && !dch->desc && !dch->stopping)
 		d350_start_next(dch);
 	spin_unlock_irqrestore(&dch->vc.lock, flags);
 }
@@ -494,13 +718,37 @@ static void d350_issue_pending(struct dma_chan *chan)
 static irqreturn_t d350_irq(int irq, void *data)
 {
 	struct d350_chan *dch = data;
-	struct device *dev = dch->vc.chan.device->dev;
-	struct virt_dma_desc *vd = &dch->desc->vd;
+	struct d350_desc *desc;
+	struct virt_dma_desc *vd;
+	unsigned long flags;
 	u32 ch_status;
 
+	spin_lock_irqsave(&dch->vc.lock, flags);
 	ch_status = readl(dch->base + CH_STATUS);
-	if (!ch_status)
+	if (!(ch_status & (CH_STAT_INTR_STOPPED | CH_STAT_INTR_DONE |
+			  CH_STAT_INTR_ERR))) {
+		spin_unlock_irqrestore(&dch->vc.lock, flags);
 		return IRQ_NONE;
+	}
+	if (dch->stopping) {
+		writel_relaxed(ch_status, dch->base + CH_STATUS);
+		if (!(readl_relaxed(dch->base + CH_CMD) & CH_CMD_ENABLE))
+			d350_finish_terminate(dch);
+		spin_unlock_irqrestore(&dch->vc.lock, flags);
+		return IRQ_HANDLED;
+	}
+	if (ch_status & CH_STAT_INTR_STOPPED) {
+		writel_relaxed(ch_status, dch->base + CH_STATUS);
+		spin_unlock_irqrestore(&dch->vc.lock, flags);
+		return IRQ_HANDLED;
+	}
+	desc = dch->desc;
+	if (!desc) {
+		writel_relaxed(ch_status, dch->base + CH_STATUS);
+		spin_unlock_irqrestore(&dch->vc.lock, flags);
+		return IRQ_HANDLED;
+	}
+	vd = &desc->vd;
 
 	if (ch_status & CH_STAT_INTR_ERR) {
 		u32 errinfo = readl_relaxed(dch->base + CH_ERRINFO);
@@ -513,22 +761,28 @@ static irqreturn_t d350_irq(int irq, void *data)
 			vd->tx_result.result = DMA_TRANS_ABORTED;
 
 		vd->tx_result.residue = d350_get_residue(dch);
-	} else if (!(ch_status & CH_STAT_INTR_DONE)) {
-		dev_warn(dev, "Unexpected IRQ source? 0x%08x\n", ch_status);
-	}
-	writel_relaxed(ch_status, dch->base + CH_STATUS);
-
-	spin_lock(&dch->vc.lock);
-	vchan_cookie_complete(vd);
-	if (ch_status & CH_STAT_INTR_DONE) {
-		dch->status = DMA_COMPLETE;
-		dch->residue = 0;
-		d350_start_next(dch);
-	} else {
+		writel_relaxed(ch_status, dch->base + CH_STATUS);
+		dch->desc = NULL;
+		dch->cmd = NULL;
 		dch->status = DMA_ERROR;
 		dch->residue = vd->tx_result.residue;
+		vchan_cookie_complete(vd);
+		d350_start_next(dch);
+	} else {
+		writel_relaxed(ch_status, dch->base + CH_STATUS);
+		dch->residue -= d350_desc_bytes(dch->cmd);
+		dch->cmd = dch->cmd->next;
+		if (dch->cmd) {
+			d350_program_cmd(dch);
+		} else {
+			dch->desc = NULL;
+			dch->status = DMA_COMPLETE;
+			dch->residue = 0;
+			vchan_cookie_complete(vd);
+			d350_start_next(dch);
+		}
 	}
-	spin_unlock(&dch->vc.lock);
+	spin_unlock_irqrestore(&dch->vc.lock, flags);
 
 	return IRQ_HANDLED;
 }
@@ -548,9 +802,27 @@ static void d350_free_chan_resources(struct dma_chan *chan)
 {
 	struct d350_chan *dch = to_d350_chan(chan);
 
+	d350_terminate_all(chan);
+	d350_synchronize(chan);
 	writel_relaxed(0, dch->base + CH_INTREN);
 	free_irq(dch->irq, dch);
 	vchan_free_chan_resources(&dch->vc);
+}
+
+static struct dma_chan *d350_of_xlate(struct of_phandle_args *dma_spec,
+				      struct of_dma *ofdma)
+{
+	struct d350 *dmac = ofdma->of_dma_data;
+	unsigned int channel;
+
+	if (dma_spec->args_count != 1)
+		return NULL;
+
+	channel = dma_spec->args[0];
+	if (channel >= dmac->nchan || channel >= dmac->nreq)
+		return NULL;
+
+	return dma_get_slave_channel(&dmac->channels[channel].vc.chan);
 }
 
 static int d350_probe(struct platform_device *pdev)
@@ -559,7 +831,7 @@ static int d350_probe(struct platform_device *pdev)
 	struct d350 *dmac;
 	void __iomem *base;
 	u32 reg;
-	int ret, nchan, dw, aw, r, p;
+	int ret, nchan, nreq, dw, aw, r, p;
 	bool coherent, memset;
 
 	base = devm_platform_ioremap_resource(pdev, 0);
@@ -581,14 +853,19 @@ static int d350_probe(struct platform_device *pdev)
 	dma_set_mask_and_coherent(dev, DMA_BIT_MASK(aw));
 	coherent = device_get_dma_attr(dev) == DEV_DMA_COHERENT;
 
+	reg = readl_relaxed(base + DMAINFO + DMA_BUILDCFG1);
+	nreq = FIELD_GET(DMA_CFG_NUM_TRIGGER_IN, reg);
+	if (nreq > nchan)
+		return dev_err_probe(dev, -EINVAL,
+				     "%d requests exceed %d dedicated channels\n",
+				     nreq, nchan);
+
 	dmac = devm_kzalloc(dev, struct_size(dmac, channels, nchan), GFP_KERNEL);
 	if (!dmac)
 		return -ENOMEM;
 
 	dmac->nchan = nchan;
-
-	reg = readl_relaxed(base + DMAINFO + DMA_BUILDCFG1);
-	dmac->nreq = FIELD_GET(DMA_CFG_NUM_TRIGGER_IN, reg);
+	dmac->nreq = nreq;
 
 	dev_dbg(dev, "DMA-350 r%dp%d with %d channels, %d requests\n", r, p, dmac->nchan, dmac->nreq);
 
@@ -597,13 +874,19 @@ static int d350_probe(struct platform_device *pdev)
 		dmac->dma.src_addr_widths |= BIT(i);
 		dmac->dma.dst_addr_widths |= BIT(i);
 	}
-	dmac->dma.directions = BIT(DMA_MEM_TO_MEM);
+	dmac->dma.directions = BIT(DMA_MEM_TO_MEM) | BIT(DMA_MEM_TO_DEV) |
+			       BIT(DMA_DEV_TO_MEM);
+	dmac->dma.min_burst = 1;
+	dmac->dma.max_burst = 1;
+	dmac->dma.max_sg_burst = 1;
 	dmac->dma.descriptor_reuse = true;
 	dmac->dma.residue_granularity = DMA_RESIDUE_GRANULARITY_BURST;
 	dmac->dma.device_alloc_chan_resources = d350_alloc_chan_resources;
 	dmac->dma.device_free_chan_resources = d350_free_chan_resources;
 	dma_cap_set(DMA_MEMCPY, dmac->dma.cap_mask);
 	dmac->dma.device_prep_dma_memcpy = d350_prep_memcpy;
+	dmac->dma.device_config = d350_config;
+	dmac->dma.device_prep_slave_sg = d350_prep_slave_sg;
 	dmac->dma.device_pause = d350_pause;
 	dmac->dma.device_resume = d350_resume;
 	dmac->dma.device_terminate_all = d350_terminate_all;
@@ -622,21 +905,21 @@ static int d350_probe(struct platform_device *pdev)
 		struct d350_chan *dch = &dmac->channels[i];
 
 		dch->base = base + DMACH(i);
+		dch->request = i < nreq ? i : -1;
 		writel_relaxed(CH_CMD_CLEAR, dch->base + CH_CMD);
 
-		reg = readl_relaxed(dch->base + CH_BUILDCFG1);
-		if (!(FIELD_GET(CH_CFG_HAS_CMDLINK, reg))) {
-			dev_warn(dev, "No command link support on channel %d\n", i);
-			continue;
-		}
 		dch->irq = platform_get_irq(pdev, i);
 		if (dch->irq < 0)
 			return dev_err_probe(dev, dch->irq,
 					     "Failed to get IRQ for channel %d\n", i);
 
+		reg = readl_relaxed(dch->base + CH_BUILDCFG1);
 		dch->has_wrap = FIELD_GET(CH_CFG_HAS_WRAP, reg);
 		dch->has_trig = FIELD_GET(CH_CFG_HAS_TRIGIN, reg) &
 				FIELD_GET(CH_CFG_HAS_TRIGSEL, reg);
+		if (i < nreq && !dch->has_trig)
+			return dev_err_probe(dev, -ENODEV,
+					     "Channel %d has no trigger input\n", i);
 
 		/* Fill is a special case of Wrap */
 		memset &= dch->has_wrap;
@@ -653,6 +936,9 @@ static int d350_probe(struct platform_device *pdev)
 		vchan_init(&dch->vc, &dmac->dma);
 	}
 
+	if (nreq)
+		dma_cap_set(DMA_SLAVE, dmac->dma.cap_mask);
+
 	if (memset) {
 		dma_cap_set(DMA_MEMSET, dmac->dma.cap_mask);
 		dmac->dma.device_prep_dma_memset = d350_prep_memset;
@@ -664,6 +950,13 @@ static int d350_probe(struct platform_device *pdev)
 	if (ret)
 		return dev_err_probe(dev, ret, "Failed to register DMA device\n");
 
+	ret = of_dma_controller_register(dev->of_node, d350_of_xlate, dmac);
+	if (ret) {
+		dma_async_device_unregister(&dmac->dma);
+		return dev_err_probe(dev, ret,
+				     "Failed to register OF DMA controller\n");
+	}
+
 	return 0;
 }
 
@@ -671,6 +964,7 @@ static void d350_remove(struct platform_device *pdev)
 {
 	struct d350 *dmac = platform_get_drvdata(pdev);
 
+	of_dma_controller_free(pdev->dev.of_node);
 	dma_async_device_unregister(&dmac->dma);
 }
 
