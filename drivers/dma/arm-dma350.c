@@ -224,6 +224,9 @@ static struct dma_async_tx_descriptor *d350_prep_memcpy(struct dma_chan *chan,
 	struct d350_desc *desc;
 	u32 *cmd;
 
+	if (!len || len > U32_MAX)
+		return NULL;
+
 	desc = kzalloc(sizeof(*desc), GFP_NOWAIT);
 	if (!desc)
 		return NULL;
@@ -261,6 +264,9 @@ static struct dma_async_tx_descriptor *d350_prep_memset(struct dma_chan *chan,
 	struct d350_chan *dch = to_d350_chan(chan);
 	struct d350_desc *desc;
 	u32 *cmd;
+
+	if (!len || len > U32_MAX)
+		return NULL;
 
 	desc = kzalloc(sizeof(*desc), GFP_NOWAIT);
 	if (!desc)
