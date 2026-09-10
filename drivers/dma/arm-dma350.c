@@ -6,6 +6,7 @@
 #include <linux/dmaengine.h>
 #include <linux/dma-mapping.h>
 #include <linux/io.h>
+#include <linux/iopoll.h>
 #include <linux/of.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
@@ -127,6 +128,7 @@
 #define CH_CFG_HAS_TRIGIN	BIT(5)
 #define CH_CFG_HAS_WRAP		BIT(1)
 
+#define D350_STATE_POLL_US	1000
 
 #define LINK_REGCLEAR		BIT(0)
 #define LINK_INTREN		BIT(2)
@@ -301,30 +303,47 @@ static int d350_pause(struct dma_chan *chan)
 {
 	struct d350_chan *dch = to_d350_chan(chan);
 	unsigned long flags;
+	u32 status;
+	int ret = 0;
 
 	spin_lock_irqsave(&dch->vc.lock, flags);
-	if (dch->status == DMA_IN_PROGRESS) {
+	if (dch->status == DMA_IN_PROGRESS && dch->desc) {
 		writel_relaxed(CH_CMD_PAUSE, dch->base + CH_CMD);
-		dch->status = DMA_PAUSED;
+		ret = readl_poll_timeout_atomic(dch->base + CH_STATUS,
+						status,
+				(status & (CH_STAT_PAUSED |
+					   CH_STAT_RESUMEWAIT)) ==
+				(CH_STAT_PAUSED | CH_STAT_RESUMEWAIT),
+				1, D350_STATE_POLL_US);
+		if (!ret)
+			dch->status = DMA_PAUSED;
 	}
 	spin_unlock_irqrestore(&dch->vc.lock, flags);
 
-	return 0;
+	return ret;
 }
 
 static int d350_resume(struct dma_chan *chan)
 {
 	struct d350_chan *dch = to_d350_chan(chan);
 	unsigned long flags;
+	u32 status;
+	int ret = 0;
 
 	spin_lock_irqsave(&dch->vc.lock, flags);
-	if (dch->status == DMA_PAUSED) {
+	if (dch->status == DMA_PAUSED && dch->desc) {
 		writel_relaxed(CH_CMD_RESUME, dch->base + CH_CMD);
-		dch->status = DMA_IN_PROGRESS;
+		ret = readl_poll_timeout_atomic(dch->base + CH_STATUS,
+						status,
+				!(status & (CH_STAT_PAUSED |
+					    CH_STAT_RESUMEWAIT)),
+				1, D350_STATE_POLL_US);
+		if (!ret)
+			dch->status = DMA_IN_PROGRESS;
 	}
 	spin_unlock_irqrestore(&dch->vc.lock, flags);
 
-	return 0;
+	return ret;
 }
 
 static u32 d350_get_residue(struct d350_chan *dch)
