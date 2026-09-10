@@ -192,6 +192,7 @@ struct d350_desc {
 	u16 xsize;
 	u16 xsizehi;
 	u8 tsz;
+	bool cyclic;
 	struct d350_desc *next;
 };
 
@@ -430,6 +431,43 @@ d350_prep_slave_sg(struct dma_chan *chan, struct scatterlist *sgl,
 		if (i + 1 < sg_len)
 			desc[i].next = &desc[i + 1];
 	}
+
+	return vchan_tx_prep(&dch->vc, &desc->vd, flags);
+
+err_free:
+	kfree(desc);
+	return NULL;
+}
+
+static struct dma_async_tx_descriptor *
+d350_prep_dma_cyclic(struct dma_chan *chan, dma_addr_t buf_addr,
+		     size_t buf_len, size_t period_len,
+		     enum dma_transfer_direction direction,
+		     unsigned long flags)
+{
+	struct d350_chan *dch = to_d350_chan(chan);
+	struct d350_desc *desc;
+	unsigned int periods, i;
+
+	if (dch->request < 0 || !dch->has_trig || !buf_len || !period_len ||
+	    buf_len > U32_MAX || period_len > U32_MAX ||
+	    buf_len % period_len)
+		return NULL;
+
+	periods = buf_len / period_len;
+	desc = kcalloc(periods, sizeof(*desc), GFP_NOWAIT);
+	if (!desc)
+		return NULL;
+
+	for (i = 0; i < periods; i++) {
+		if (d350_build_slave_cmd(dch, &desc[i],
+					 buf_addr + i * period_len, period_len,
+					 direction))
+			goto err_free;
+		if (i + 1 < periods)
+			desc[i].next = &desc[i + 1];
+	}
+	desc->cyclic = true;
 
 	return vchan_tx_prep(&dch->vc, &desc->vd, flags);
 
@@ -772,7 +810,14 @@ static irqreturn_t d350_irq(int irq, void *data)
 		writel_relaxed(ch_status, dch->base + CH_STATUS);
 		dch->residue -= d350_desc_bytes(dch->cmd);
 		dch->cmd = dch->cmd->next;
-		if (dch->cmd) {
+		if (desc->cyclic) {
+			if (!dch->cmd) {
+				dch->cmd = desc;
+				dch->residue = d350_desc_chain_bytes(desc);
+			}
+			vchan_cyclic_callback(vd);
+			d350_program_cmd(dch);
+		} else if (dch->cmd) {
 			d350_program_cmd(dch);
 		} else {
 			dch->desc = NULL;
@@ -887,6 +932,7 @@ static int d350_probe(struct platform_device *pdev)
 	dmac->dma.device_prep_dma_memcpy = d350_prep_memcpy;
 	dmac->dma.device_config = d350_config;
 	dmac->dma.device_prep_slave_sg = d350_prep_slave_sg;
+	dmac->dma.device_prep_dma_cyclic = d350_prep_dma_cyclic;
 	dmac->dma.device_pause = d350_pause;
 	dmac->dma.device_resume = d350_resume;
 	dmac->dma.device_terminate_all = d350_terminate_all;
@@ -936,8 +982,10 @@ static int d350_probe(struct platform_device *pdev)
 		vchan_init(&dch->vc, &dmac->dma);
 	}
 
-	if (nreq)
+	if (nreq) {
 		dma_cap_set(DMA_SLAVE, dmac->dma.cap_mask);
+		dma_cap_set(DMA_CYCLIC, dmac->dma.cap_mask);
+	}
 
 	if (memset) {
 		dma_cap_set(DMA_MEMSET, dmac->dma.cap_mask);
