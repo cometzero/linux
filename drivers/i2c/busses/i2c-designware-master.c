@@ -12,6 +12,8 @@
 #define DEFAULT_SYMBOL_NAMESPACE	"I2C_DW"
 
 #include <linux/delay.h>
+#include <linux/dmaengine.h>
+#include <linux/dma-mapping.h>
 #include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/export.h>
@@ -21,7 +23,9 @@
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/pinctrl/consumer.h>
+#include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
 
@@ -30,6 +34,32 @@
 #define AMD_TIMEOUT_MIN_US	25
 #define AMD_TIMEOUT_MAX_US	250
 #define AMD_MASTERCFG_MASK	GENMASK(15, 0)
+#define I2C_DW_DMA_MIN_COMMANDS	8
+#define I2C_DW_DMA_SUPPORTED_FLAGS	(I2C_M_RD | I2C_M_TEN | I2C_M_DMA_SAFE)
+
+struct i2c_dw_dma_done {
+	struct completion completion;
+	struct dmaengine_result result;
+};
+
+struct i2c_dw_dma_xfer {
+	struct i2c_dw_dma_done tx;
+	struct i2c_dw_dma_done rx;
+	u16 *commands;
+	u8 *rx_buf;
+	dma_addr_t commands_dma;
+	dma_addr_t rx_dma;
+	size_t commands_len;
+};
+
+static void i2c_dw_dma_complete(void *arg,
+				const struct dmaengine_result *result)
+{
+	struct i2c_dw_dma_done *done = arg;
+
+	done->result = *result;
+	complete(&done->completion);
+}
 
 static void i2c_dw_configure_fifo_master(struct dw_i2c_dev *dev)
 {
@@ -251,7 +281,7 @@ static int i2c_dw_init_master(struct dw_i2c_dev *dev)
 	return 0;
 }
 
-static void i2c_dw_xfer_init(struct dw_i2c_dev *dev)
+static void i2c_dw_xfer_init(struct dw_i2c_dev *dev, bool use_dma)
 {
 	struct i2c_msg *msgs = dev->msgs;
 	u32 ic_con = 0, ic_tar = 0;
@@ -293,7 +323,9 @@ static void i2c_dw_xfer_init(struct dw_i2c_dev *dev)
 
 	/* Clear and enable interrupts */
 	regmap_read(dev->map, DW_IC_CLR_INTR, &dummy);
-	__i2c_dw_write_intr_mask(dev, DW_IC_INTR_MASTER_MASK);
+	__i2c_dw_write_intr_mask(dev, use_dma ?
+				 DW_IC_INTR_TX_ABRT | DW_IC_INTR_STOP_DET :
+				 DW_IC_INTR_MASTER_MASK);
 }
 
 /*
@@ -371,7 +403,7 @@ static int amd_i2c_dw_xfer_quirk(struct i2c_adapter *adap, struct i2c_msg *msgs,
 	dev->msgs = msgs;
 	dev->msgs_num = num_msgs;
 	dev->msg_write_idx = 0;
-	i2c_dw_xfer_init(dev);
+	i2c_dw_xfer_init(dev, false);
 
 	/* Initiate messages read/write transaction */
 	for (msg_wrt_idx = 0; msg_wrt_idx < num_msgs; msg_wrt_idx++) {
@@ -808,6 +840,209 @@ static int i2c_dw_wait_transfer(struct dw_i2c_dev *dev)
 	return ret ? 0 : -ETIMEDOUT;
 }
 
+static bool i2c_dw_dma_can_xfer(struct dw_i2c_dev *dev,
+				struct i2c_msg *msgs, int num,
+				size_t *num_commands, size_t *rx_len)
+{
+	unsigned int addr;
+	int i;
+
+	if (!dev->dma_tx || !dev->dma_rx || num <= 0)
+		return false;
+
+	addr = msgs[0].addr;
+	*num_commands = 0;
+	*rx_len = 0;
+	for (i = 0; i < num; i++) {
+		if (!msgs[i].len || msgs[i].addr != addr ||
+		    (msgs[i].flags & ~I2C_DW_DMA_SUPPORTED_FLAGS) ||
+		    ((msgs[i].flags ^ msgs[0].flags) & I2C_M_TEN) ||
+		    *num_commands > U32_MAX / sizeof(u16) - msgs[i].len)
+			return false;
+
+		*num_commands += msgs[i].len;
+		if (msgs[i].flags & I2C_M_RD)
+			*rx_len += msgs[i].len;
+	}
+
+	return *num_commands >= I2C_DW_DMA_MIN_COMMANDS;
+}
+
+static void i2c_dw_dma_build_commands(struct dw_i2c_dev *dev,
+				      struct i2c_msg *msgs, int num,
+				      u16 *commands)
+{
+	size_t pos = 0;
+	int i, j;
+
+	for (i = 0; i < num; i++) {
+		for (j = 0; j < msgs[i].len; j++) {
+			u16 cmd = msgs[i].flags & I2C_M_RD ? BIT(8) :
+				  msgs[i].buf[j];
+
+			if (i && !j && (dev->master_cfg & DW_IC_CON_RESTART_EN))
+				cmd |= BIT(10);
+			if (i == num - 1 && j == msgs[i].len - 1)
+				cmd |= BIT(9);
+			commands[pos++] = cmd;
+		}
+	}
+}
+
+static void i2c_dw_dma_copy_rx(struct i2c_msg *msgs, int num, const u8 *rx)
+{
+	int i;
+
+	for (i = 0; i < num; i++) {
+		if (!(msgs[i].flags & I2C_M_RD))
+			continue;
+		memcpy(msgs[i].buf, rx, msgs[i].len);
+		rx += msgs[i].len;
+	}
+}
+
+static int i2c_dw_dma_xfer(struct dw_i2c_dev *dev, struct i2c_msg *msgs,
+			   int num, size_t num_commands, size_t rx_len)
+{
+	struct device *tx_dev = dmaengine_get_dma_device(dev->dma_tx);
+	struct device *rx_dev = dmaengine_get_dma_device(dev->dma_rx);
+	struct dma_async_tx_descriptor *txdesc, *rxdesc = NULL;
+	struct i2c_dw_dma_xfer xfer = {};
+	dma_cookie_t cookie;
+	unsigned long timeout = dev->adapter.timeout;
+	u32 dma_cr = DW_IC_DMA_CR_TDMAE;
+	bool tx_mapped = false, rx_mapped = false;
+	bool tx_submitted = false, rx_submitted = false;
+	bool started = false, success = false;
+	int ret;
+
+	init_completion(&xfer.tx.completion);
+	init_completion(&xfer.rx.completion);
+	xfer.commands_len = num_commands * sizeof(*xfer.commands);
+	xfer.commands = kmalloc(xfer.commands_len, GFP_KERNEL);
+	if (!xfer.commands)
+		return -ENOMEM;
+	if (rx_len) {
+		xfer.rx_buf = kmalloc(rx_len, GFP_KERNEL);
+		if (!xfer.rx_buf) {
+			ret = -ENOMEM;
+			goto free_buffers;
+		}
+	}
+	i2c_dw_dma_build_commands(dev, msgs, num, xfer.commands);
+
+	xfer.commands_dma = dma_map_single(tx_dev, xfer.commands,
+					   xfer.commands_len, DMA_TO_DEVICE);
+	if (dma_mapping_error(tx_dev, xfer.commands_dma)) {
+		ret = -ENOMEM;
+		goto free_buffers;
+	}
+	tx_mapped = true;
+
+	if (rx_len) {
+		xfer.rx_dma = dma_map_single(rx_dev, xfer.rx_buf, rx_len,
+					     DMA_FROM_DEVICE);
+		if (dma_mapping_error(rx_dev, xfer.rx_dma)) {
+			ret = -ENOMEM;
+			goto unmap_buffers;
+		}
+		rx_mapped = true;
+		rxdesc = dmaengine_prep_slave_single(dev->dma_rx, xfer.rx_dma,
+						 rx_len, DMA_DEV_TO_MEM,
+						 DMA_PREP_INTERRUPT |
+						 DMA_CTRL_ACK);
+		if (!rxdesc) {
+			ret = -EIO;
+			goto unmap_buffers;
+		}
+		rxdesc->callback_result = i2c_dw_dma_complete;
+		rxdesc->callback_param = &xfer.rx;
+	}
+
+	txdesc = dmaengine_prep_slave_single(dev->dma_tx, xfer.commands_dma,
+					     xfer.commands_len, DMA_MEM_TO_DEV,
+					     DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
+	if (!txdesc) {
+		ret = -EIO;
+		goto unmap_buffers;
+	}
+	txdesc->callback_result = i2c_dw_dma_complete;
+	txdesc->callback_param = &xfer.tx;
+
+	if (rxdesc) {
+		cookie = dmaengine_submit(rxdesc);
+		ret = dma_submit_error(cookie);
+		if (ret)
+			goto stop_dma;
+		rx_submitted = true;
+		dma_cr |= DW_IC_DMA_CR_RDMAE;
+	}
+	cookie = dmaengine_submit(txdesc);
+	ret = dma_submit_error(cookie);
+	if (ret)
+		goto stop_dma;
+	tx_submitted = true;
+
+	dev->status = STATUS_ACTIVE;
+	i2c_dw_xfer_init(dev, true);
+	regmap_write(dev->map, DW_IC_DMA_TDLR, 0);
+	regmap_write(dev->map, DW_IC_DMA_RDLR, 0);
+	if (rx_submitted)
+		dma_async_issue_pending(dev->dma_rx);
+	dma_async_issue_pending(dev->dma_tx);
+	regmap_write(dev->map, DW_IC_DMA_CR, dma_cr);
+	started = true;
+
+	ret = i2c_dw_wait_transfer(dev);
+	if (ret || dev->cmd_err || dev->msg_err)
+		goto stop_dma;
+	if (!wait_for_completion_timeout(&xfer.tx.completion, timeout)) {
+		ret = -ETIMEDOUT;
+		goto stop_dma;
+	}
+	if (rx_submitted &&
+	    !wait_for_completion_timeout(&xfer.rx.completion, timeout)) {
+		ret = -ETIMEDOUT;
+		goto stop_dma;
+	}
+	if (xfer.tx.result.result != DMA_TRANS_NOERROR ||
+	    (rx_submitted && xfer.rx.result.result != DMA_TRANS_NOERROR)) {
+		ret = -EIO;
+		goto stop_dma;
+	}
+
+	regmap_write(dev->map, DW_IC_DMA_CR, 0);
+	dmaengine_synchronize(dev->dma_tx);
+	if (rx_submitted)
+		dmaengine_synchronize(dev->dma_rx);
+	dev->status = 0;
+	success = true;
+	ret = 0;
+	goto unmap_buffers;
+
+stop_dma:
+	regmap_write(dev->map, DW_IC_DMA_CR, 0);
+	if (tx_submitted)
+		dmaengine_terminate_sync(dev->dma_tx);
+	if (rx_submitted)
+		dmaengine_terminate_sync(dev->dma_rx);
+unmap_buffers:
+	if (rx_mapped) {
+		dma_unmap_single(rx_dev, xfer.rx_dma, rx_len, DMA_FROM_DEVICE);
+		if (success)
+			i2c_dw_dma_copy_rx(msgs, num, xfer.rx_buf);
+	}
+	if (tx_mapped)
+		dma_unmap_single(tx_dev, xfer.commands_dma, xfer.commands_len,
+				 DMA_TO_DEVICE);
+free_buffers:
+	kfree(xfer.rx_buf);
+	kfree(xfer.commands);
+	if (ret && !started)
+		ret = -EAGAIN;
+	return ret;
+}
+
 /*
  * Prepare controller for a transaction and call i2c_dw_xfer_msg.
  */
@@ -815,6 +1050,8 @@ static int
 i2c_dw_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[], int num)
 {
 	struct dw_i2c_dev *dev = i2c_get_adapdata(adap);
+	size_t num_commands, rx_len;
+	bool use_dma;
 	int ret;
 
 	dev_dbg(dev->dev, "%s: msgs: %d\n", __func__, num);
@@ -848,13 +1085,26 @@ i2c_dw_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[], int num)
 	if (ret < 0)
 		goto done;
 
-	/* Start the transfers */
-	i2c_dw_xfer_init(dev);
+	use_dma = i2c_dw_dma_can_xfer(dev, msgs, num, &num_commands,
+				      &rx_len);
+	if (use_dma) {
+		ret = i2c_dw_dma_xfer(dev, msgs, num, num_commands, rx_len);
+		if (ret == -EAGAIN) {
+			i2c_dw_xfer_init(dev, false);
+			ret = i2c_dw_wait_transfer(dev);
+		}
+	} else {
+		/* Start the transfers */
+		i2c_dw_xfer_init(dev, false);
 
-	/* Wait for tx to complete */
-	ret = i2c_dw_wait_transfer(dev);
+		/* Wait for tx to complete */
+		ret = i2c_dw_wait_transfer(dev);
+	}
 	if (ret) {
-		dev_err(dev->dev, "controller timed out\n");
+		if (ret == -ETIMEDOUT)
+			dev_err(dev->dev, "controller timed out\n");
+		else
+			dev_err(dev->dev, "DMA transfer failed: %d\n", ret);
 		/* i2c_dw_init_master() implicitly disables the adapter */
 		i2c_recover_bus(&dev->adapter);
 		i2c_dw_init_master(dev);
@@ -1003,6 +1253,64 @@ static int i2c_dw_init_recovery_info(struct dw_i2c_dev *dev)
 	return 0;
 }
 
+static int i2c_dw_dma_init(struct dw_i2c_dev *dev)
+{
+	struct dma_slave_config config = {};
+	struct platform_device *pdev;
+	struct resource *res;
+	int ret;
+
+	if (!device_property_present(dev->dev, "dmas"))
+		return 0;
+	if (!dev_is_platform(dev->dev))
+		return dev_err_probe(dev->dev, -EOPNOTSUPP,
+				     "DMA requires a platform MMIO resource\n");
+
+	pdev = to_platform_device(dev->dev);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res)
+		return dev_err_probe(dev->dev, -EINVAL,
+				     "missing MMIO resource for DMA\n");
+
+	dev->dma_tx = devm_dma_request_chan(dev->dev, "tx");
+	if (IS_ERR(dev->dma_tx)) {
+		if (PTR_ERR(dev->dma_tx) == -ENODEV) {
+			dev->dma_tx = NULL;
+			return 0;
+		}
+		return dev_err_probe(dev->dev, PTR_ERR(dev->dma_tx),
+				     "failed to request TX DMA\n");
+	}
+
+	dev->dma_rx = devm_dma_request_chan(dev->dev, "rx");
+	if (IS_ERR(dev->dma_rx))
+		return dev_err_probe(dev->dev, PTR_ERR(dev->dma_rx),
+				     "failed to request RX DMA\n");
+
+	config.direction = DMA_MEM_TO_DEV;
+	config.dst_addr = res->start + DW_IC_DATA_CMD;
+	config.dst_addr_width = DMA_SLAVE_BUSWIDTH_2_BYTES;
+	config.dst_maxburst = 1;
+	ret = dmaengine_slave_config(dev->dma_tx, &config);
+	if (ret)
+		return dev_err_probe(dev->dev, ret,
+				     "failed to configure TX DMA\n");
+
+	memset(&config, 0, sizeof(config));
+	config.direction = DMA_DEV_TO_MEM;
+	config.src_addr = res->start + DW_IC_DATA_CMD;
+	config.src_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
+	config.src_maxburst = 1;
+	ret = dmaengine_slave_config(dev->dma_rx, &config);
+	if (ret)
+		return dev_err_probe(dev->dev, ret,
+				     "failed to configure RX DMA\n");
+
+	dev_info(dev->dev, "DMA enabled for transfers of %u commands or more\n",
+		 I2C_DW_DMA_MIN_COMMANDS);
+	return 0;
+}
+
 int i2c_dw_probe_master(struct dw_i2c_dev *dev)
 {
 	struct i2c_adapter *adap = &dev->adapter;
@@ -1023,6 +1331,10 @@ int i2c_dw_probe_master(struct dw_i2c_dev *dev)
 		return ret;
 
 	ret = i2c_dw_set_fifo_size(dev);
+	if (ret)
+		return ret;
+
+	ret = i2c_dw_dma_init(dev);
 	if (ret)
 		return ret;
 

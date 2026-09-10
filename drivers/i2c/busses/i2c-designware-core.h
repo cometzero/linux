@@ -76,6 +76,9 @@
 #define DW_IC_RXFLR				0x78
 #define DW_IC_SDA_HOLD				0x7c
 #define DW_IC_TX_ABRT_SOURCE			0x80
+#define DW_IC_DMA_CR				0x88
+#define DW_IC_DMA_TDLR				0x8c
+#define DW_IC_DMA_RDLR				0x90
 #define DW_IC_ENABLE_STATUS			0x9c
 #define DW_IC_CLR_RESTART_DET			0xa8
 #define DW_IC_SMBUS_INTR_MASK			0xcc
@@ -111,6 +114,9 @@
 
 #define DW_IC_ENABLE_ENABLE			BIT(0)
 #define DW_IC_ENABLE_ABORT			BIT(1)
+
+#define DW_IC_DMA_CR_RDMAE			BIT(0)
+#define DW_IC_DMA_CR_TDMAE			BIT(1)
 
 #define DW_IC_STATUS_ACTIVITY			BIT(0)
 #define DW_IC_STATUS_TFE			BIT(2)
@@ -186,6 +192,7 @@
 						 DW_IC_TX_ABRT_GCALL_NOACK)
 
 struct clk;
+struct dma_chan;
 struct device;
 struct reset_control;
 
@@ -262,6 +269,8 @@ struct dw_i2c_dev {
 	struct clk		*clk;
 	struct clk		*pclk;
 	struct reset_control	*rst;
+	struct dma_chan		*dma_tx;
+	struct dma_chan		*dma_rx;
 	struct i2c_client	*slave;
 	u32			(*get_clk_rate_khz) (struct dw_i2c_dev *dev);
 	int			cmd_err;
