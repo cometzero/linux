@@ -29,6 +29,106 @@
 		spi3 = &dw_spi3;
 	};
 
+	i2s_clk: clock-1536000 {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <1536000>;
+	};
+
+	i2s0_playback_codec: i2s0-spdif-dit {
+		compatible = "linux,spdif-dit";
+		#sound-dai-cells = <0>;
+	};
+
+	i2s0_capture_codec: i2s0-spdif-dir {
+		compatible = "linux,spdif-dir";
+		#sound-dai-cells = <0>;
+	};
+
+	i2s1_playback_codec: i2s1-spdif-dit {
+		compatible = "linux,spdif-dit";
+		#sound-dai-cells = <0>;
+	};
+
+	i2s1_capture_codec: i2s1-spdif-dir {
+		compatible = "linux,spdif-dir";
+		#sound-dai-cells = <0>;
+	};
+
+	i2s0_sound: i2s0-sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "Apollo I2S0";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		simple-audio-card,dai-link@0 {
+			reg = <0>;
+			format = "i2s";
+			bitclock-master = <&i2s0_tx_cpu>;
+			frame-master = <&i2s0_tx_cpu>;
+
+			i2s0_tx_cpu: cpu {
+				sound-dai = <&dw_i2s0>;
+			};
+
+			codec {
+				sound-dai = <&i2s0_playback_codec>;
+			};
+		};
+
+		simple-audio-card,dai-link@1 {
+			reg = <1>;
+			format = "i2s";
+			bitclock-master = <&i2s0_rx_cpu>;
+			frame-master = <&i2s0_rx_cpu>;
+
+			i2s0_rx_cpu: cpu {
+				sound-dai = <&dw_i2s0>;
+			};
+
+			codec {
+				sound-dai = <&i2s0_capture_codec>;
+			};
+		};
+	};
+
+	i2s1_sound: i2s1-sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "Apollo I2S1";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		simple-audio-card,dai-link@0 {
+			reg = <0>;
+			format = "i2s";
+			bitclock-master = <&i2s1_tx_codec>;
+			frame-master = <&i2s1_tx_codec>;
+
+			cpu {
+				sound-dai = <&dw_i2s1>;
+			};
+
+			i2s1_tx_codec: codec {
+				sound-dai = <&i2s1_playback_codec>;
+			};
+		};
+
+		simple-audio-card,dai-link@1 {
+			reg = <1>;
+			format = "i2s";
+			bitclock-master = <&i2s1_rx_codec>;
+			frame-master = <&i2s1_rx_codec>;
+
+			cpu {
+				sound-dai = <&dw_i2s1>;
+			};
+
+			i2s1_rx_codec: codec {
+				sound-dai = <&i2s1_capture_codec>;
+			};
+		};
+	};
+
 	chosen {
 		stdout-path = &soc_serial0;
 	};
@@ -89,7 +189,7 @@
 		interrupts = <GIC_SPI 263 IRQ_TYPE_LEVEL_HIGH>;
 	};
 
-	dma350: dma-controller@31000000 {
+	dma350_0: dma-controller@31000000 {
 		compatible = "arm,dma-350";
 		reg = <0x0 0x31000000 0x0 0x10000>;
 		interrupts = <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>,
@@ -100,6 +200,20 @@
 			     <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>,
 			     <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>,
 			     <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>;
+		#dma-cells = <1>;
+	};
+
+	dma350_1: dma-controller@31010000 {
+		compatible = "arm,dma-350";
+		reg = <0x0 0x31010000 0x0 0x10000>;
+		interrupts = <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>;
 		#dma-cells = <1>;
 	};
 
@@ -229,7 +343,7 @@
 		#size-cells = <0>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&spi0_pins>;
-		dmas = <&dma350 0>, <&dma350 1>;
+		dmas = <&dma350_0 0>, <&dma350_0 1>;
 		dma-names = "tx", "rx";
 
 		loopback@0 {
@@ -251,7 +365,7 @@
 		#size-cells = <0>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&spi1_pins>;
-		dmas = <&dma350 2>, <&dma350 3>;
+		dmas = <&dma350_0 2>, <&dma350_0 3>;
 		dma-names = "tx", "rx";
 
 		loopback@0 {
@@ -311,7 +425,7 @@
 		reg-io-width = <4>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&uart0_pins>;
-		dmas = <&dma350 4>, <&dma350 5>;
+		dmas = <&dma350_0 4>, <&dma350_0 5>;
 		dma-names = "tx", "rx";
 	};
 
@@ -325,7 +439,7 @@
 		reg-io-width = <4>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&uart1_pins>;
-		dmas = <&dma350 6>, <&dma350 7>;
+		dmas = <&dma350_0 6>, <&dma350_0 7>;
 		dma-names = "tx", "rx";
 	};
 
@@ -351,6 +465,32 @@
 		reg-io-width = <4>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&uart3_pins>;
+	};
+
+	dw_i2s0: i2s@30200000 {
+		compatible = "snps,designware-i2s";
+		reg = <0x0 0x30200000 0x0 0x10000>;
+		interrupts = <GIC_SPI 356 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&i2s_clk>;
+		clock-names = "i2sclk";
+		#sound-dai-cells = <0>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2s0_pins>;
+		dmas = <&dma350_1 0>, <&dma350_1 1>;
+		dma-names = "tx", "rx";
+	};
+
+	dw_i2s1: i2s@30210000 {
+		compatible = "snps,designware-i2s";
+		reg = <0x0 0x30210000 0x0 0x10000>;
+		interrupts = <GIC_SPI 357 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&i2s_clk>;
+		clock-names = "i2sclk";
+		#sound-dai-cells = <0>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2s1_pins>;
+		dmas = <&dma350_1 2>, <&dma350_1 3>;
+		dma-names = "tx", "rx";
 	};
 
 	pinctrl_peri0: gpio@301e0000 {

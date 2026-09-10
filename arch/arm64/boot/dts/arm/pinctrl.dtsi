@@ -219,6 +219,20 @@
 		input-enable;
 	};
 
+	i2s0_pins: i2s0-pins {
+		pinmux = <HSOC_PINMUX(3, 0, 2)>, <HSOC_PINMUX(3, 1, 2)>,
+			 <HSOC_PINMUX(3, 2, 2)>, <HSOC_PINMUX(3, 3, 2)>;
+		hsoc,drive-strength = <2>;
+		input-enable;
+	};
+
+	i2s1_pins: i2s1-pins {
+		pinmux = <HSOC_PINMUX(3, 4, 2)>, <HSOC_PINMUX(3, 5, 2)>,
+			 <HSOC_PINMUX(3, 6, 2)>, <HSOC_PINMUX(3, 7, 2)>;
+		hsoc,drive-strength = <2>;
+		input-enable;
+	};
+
 	uart0_pins: uart0-pins {
 		pinmux = <HSOC_PINMUX(4, 0, 2)>, <HSOC_PINMUX(4, 1, 2)>;
 		hsoc,drive-strength = <1>;
