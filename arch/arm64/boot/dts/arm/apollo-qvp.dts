@@ -89,6 +89,21 @@
 		interrupts = <GIC_SPI 263 IRQ_TYPE_LEVEL_HIGH>;
 	};
 
+	dma350: dma-controller@31000000 {
+		compatible = "arm,dma-350";
+		reg = <0x0 0x31000000 0x0 0x10000>;
+		interrupts = <GIC_SPI 271 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 272 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 273 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 274 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 275 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 276 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 277 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 278 IRQ_TYPE_LEVEL_HIGH>;
+		#dma-cells = <1>;
+		dma-coherent;
+	};
+
 	dw_i2c0: i2c@30100000 {
 		compatible = "snps,designware-i2c";
 		reg = <0x0 0x30100000 0x0 0x10000>;
@@ -215,6 +230,8 @@
 		#size-cells = <0>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&spi0_pins>;
+		dmas = <&dma350 0>, <&dma350 1>;
+		dma-names = "tx", "rx";
 
 		loopback@0 {
 			compatible = "linux,spi-loopback-test";
@@ -235,6 +252,8 @@
 		#size-cells = <0>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&spi1_pins>;
+		dmas = <&dma350 2>, <&dma350 3>;
+		dma-names = "tx", "rx";
 
 		loopback@0 {
 			compatible = "linux,spi-loopback-test";
@@ -293,6 +312,8 @@
 		reg-io-width = <4>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&uart0_pins>;
+		dmas = <&dma350 4>, <&dma350 5>;
+		dma-names = "tx", "rx";
 	};
 
 	dw_uart1: serial@301b0000 {
@@ -305,6 +326,8 @@
 		reg-io-width = <4>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&uart1_pins>;
+		dmas = <&dma350 6>, <&dma350 7>;
+		dma-names = "tx", "rx";
 	};
 
 	dw_uart2: serial@301c0000 {
