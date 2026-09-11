@@ -27,6 +27,8 @@
 &soc {
 	pcie4: pcie@10040000000 {
 		compatible = "pci-host-ecam-generic";
+		/* Enable only for PCIe qualification: ECAM reads can raise SError. */
+		status = "disabled";
 		device_type = "pci";
 		#address-cells = <3>;
 		#size-cells = <2>;
