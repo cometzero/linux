@@ -1293,6 +1293,8 @@ patternProperties:
     description: Purism, SPC
   "^puya,.*":
     description: Puya Semiconductor (Shanghai) Co., Ltd.
+  "^qbox,.*":
+    description: QBox SystemC virtual platform
   "^qca,.*":
     description: Qualcomm Atheros, Inc.
   "^qcom,.*":

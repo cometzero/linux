@@ -137,6 +137,15 @@ config PCI_HOST_GENERIC
 	  Say Y here if you want to support a simple generic PCI host
 	  controller, such as the one emulated by kvmtool.
 
+config PCIE_QBOX_EPC
+	tristate "QBox virtual PCIe endpoint controller"
+	depends on OF && PCI_ENDPOINT
+	help
+	  Enable the virtual endpoint controller exposed by QBox. This is used
+	  to connect Linux PCI endpoint functions to a QBox PCIe root port.
+
+	  If unsure, say N.
+
 config PCIE_HISI_ERR
 	depends on ACPI_APEI_GHES && (ARM64 || COMPILE_TEST)
 	bool "HiSilicon HIP PCIe controller error handling driver"
