@@ -2138,6 +2138,7 @@ static int snd_pcm_drain(struct snd_pcm_substream *substream,
 
 	for (;;) {
 		long tout;
+		long wait_time = 0;
 		struct snd_pcm_runtime *to_check;
 		if (signal_pending(current)) {
 			result = -ERESTARTSYS;
@@ -2152,6 +2153,7 @@ static int snd_pcm_drain(struct snd_pcm_substream *substream,
 			runtime = s->runtime;
 			if (runtime->state == SNDRV_PCM_STATE_DRAINING) {
 				to_check = runtime;
+				wait_time = s->wait_time;
 				break;
 			}
 		}
@@ -2170,6 +2172,8 @@ static int snd_pcm_drain(struct snd_pcm_substream *substream,
 				long t = runtime->buffer_size * 1100 / runtime->rate;
 				tout = max(t, tout);
 			}
+			/* Keep the default minimum for short R/W overrides. */
+			tout = max(tout, wait_time);
 			tout = msecs_to_jiffies(tout);
 		}
 		tout = schedule_timeout(tout);
