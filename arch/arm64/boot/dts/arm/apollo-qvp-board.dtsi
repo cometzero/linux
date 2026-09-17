@@ -12,13 +12,197 @@
 		vout-supply = <&tps6594_buck1>;
 	};
 
+	tps6594-buck2-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_buck2>;
+	};
+
+	tps6594-buck3-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_buck3>;
+	};
+
+	tps6594-buck4-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_buck4>;
+	};
+
+	tps6594-buck5-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_buck5>;
+	};
+
 	tps6594-ldo1-output {
 		compatible = "regulator-output";
 		vout-supply = <&tps6594_ldo1>;
 	};
+
+	tps6594-ldo2-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_ldo2>;
+	};
+
+	tps6594-ldo3-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_ldo3>;
+	};
+
+	tps6594-ldo4-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_ldo4>;
+	};
+
+	tps6594-1-buck1-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_1_buck1>;
+	};
+
+	tps6594-1-buck2-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_1_buck2>;
+	};
+
+	tps6594-1-buck3-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_1_buck3>;
+	};
+
+	tps6594-1-buck4-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_1_buck4>;
+	};
+
+	tps6594-1-buck5-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_1_buck5>;
+	};
+
+	tps6594-1-ldo1-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_1_ldo1>;
+	};
+
+	tps6594-1-ldo2-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_1_ldo2>;
+	};
+
+	tps6594-1-ldo3-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_1_ldo3>;
+	};
+
+	tps6594-1-ldo4-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_1_ldo4>;
+	};
+
+	tps6594-2-buck1-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_2_buck1>;
+	};
+
+	tps6594-2-buck2-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_2_buck2>;
+	};
+
+	tps6594-2-buck3-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_2_buck3>;
+	};
+
+	tps6594-2-buck4-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_2_buck4>;
+	};
+
+	tps6594-2-buck5-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_2_buck5>;
+	};
+
+	tps6594-2-ldo1-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_2_ldo1>;
+	};
+
+	tps6594-2-ldo2-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_2_ldo2>;
+	};
+
+	tps6594-2-ldo3-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_2_ldo3>;
+	};
+
+	tps6594-2-ldo4-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_2_ldo4>;
+	};
+
+	tps6594-3-buck1-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_3_buck1>;
+	};
+
+	tps6594-3-buck2-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_3_buck2>;
+	};
+
+	tps6594-3-buck3-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_3_buck3>;
+	};
+
+	tps6594-3-buck4-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_3_buck4>;
+	};
+
+	tps6594-3-buck5-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_3_buck5>;
+	};
+
+	tps6594-3-ldo1-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_3_ldo1>;
+	};
+
+	tps6594-3-ldo2-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_3_ldo2>;
+	};
+
+	tps6594-3-ldo3-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_3_ldo3>;
+	};
+
+	tps6594-3-ldo4-output {
+		compatible = "regulator-output";
+		vout-supply = <&tps6594_3_ldo4>;
+	};
 };
 
 &dw_i2c0 {
+	/* Three independent 24C02 targets share this controller. */
+	eeprom@51 {
+		compatible = "atmel,24c02";
+		reg = <0x51>;
+		pagesize = <8>;
+	};
+
+	eeprom@52 {
+		compatible = "atmel,24c02";
+		reg = <0x52>;
+		pagesize = <8>;
+	};
+
+	/* Each PMIC occupies five I2C addresses: base through base + 4. */
 	board_pmic: pmic@48 {
 		compatible = "ti,tps6594-q1";
 		reg = <0x48>;
@@ -41,8 +225,266 @@
 				regulator-max-microvolt = <900000>;
 			};
 
+			tps6594_buck2: buck2 {
+				regulator-name = "tps6594-buck2";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_buck3: buck3 {
+				regulator-name = "tps6594-buck3";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_buck4: buck4 {
+				regulator-name = "tps6594-buck4";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_buck5: buck5 {
+				regulator-name = "tps6594-buck5";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
 			tps6594_ldo1: ldo1 {
 				regulator-name = "tps6594-ldo1";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+
+			tps6594_ldo2: ldo2 {
+				regulator-name = "tps6594-ldo2";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+
+			tps6594_ldo3: ldo3 {
+				regulator-name = "tps6594-ldo3";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+
+			tps6594_ldo4: ldo4 {
+				regulator-name = "tps6594-ldo4";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+		};
+	};
+
+	board_pmic_1: pmic@58 {
+		compatible = "ti,tps6594-q1";
+		reg = <0x58>;
+		interrupt-parent = <&smd_gpio>;
+		interrupts = <3 IRQ_TYPE_LEVEL_LOW>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		gpio-line-names =
+			"tps6594-1-gpio1", "tps6594-1-gpio2",
+			"tps6594-1-gpio3", "tps6594-1-gpio4",
+			"tps6594-1-gpio5", "tps6594-1-gpio6",
+			"tps6594-1-gpio7", "tps6594-1-gpio8",
+			"tps6594-1-gpio9", "tps6594-1-gpio10",
+			"tps6594-1-gpio11";
+
+		regulators {
+			tps6594_1_buck1: buck1 {
+				regulator-name = "tps6594-1-buck1";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_1_buck2: buck2 {
+				regulator-name = "tps6594-1-buck2";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_1_buck3: buck3 {
+				regulator-name = "tps6594-1-buck3";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_1_buck4: buck4 {
+				regulator-name = "tps6594-1-buck4";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_1_buck5: buck5 {
+				regulator-name = "tps6594-1-buck5";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_1_ldo1: ldo1 {
+				regulator-name = "tps6594-1-ldo1";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+
+			tps6594_1_ldo2: ldo2 {
+				regulator-name = "tps6594-1-ldo2";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+
+			tps6594_1_ldo3: ldo3 {
+				regulator-name = "tps6594-1-ldo3";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+
+			tps6594_1_ldo4: ldo4 {
+				regulator-name = "tps6594-1-ldo4";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+		};
+	};
+
+	board_pmic_2: pmic@60 {
+		compatible = "ti,tps6594-q1";
+		reg = <0x60>;
+		interrupt-parent = <&smd_gpio>;
+		interrupts = <4 IRQ_TYPE_LEVEL_LOW>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		gpio-line-names =
+			"tps6594-2-gpio1", "tps6594-2-gpio2",
+			"tps6594-2-gpio3", "tps6594-2-gpio4",
+			"tps6594-2-gpio5", "tps6594-2-gpio6",
+			"tps6594-2-gpio7", "tps6594-2-gpio8",
+			"tps6594-2-gpio9", "tps6594-2-gpio10",
+			"tps6594-2-gpio11";
+
+		regulators {
+			tps6594_2_buck1: buck1 {
+				regulator-name = "tps6594-2-buck1";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_2_buck2: buck2 {
+				regulator-name = "tps6594-2-buck2";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_2_buck3: buck3 {
+				regulator-name = "tps6594-2-buck3";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_2_buck4: buck4 {
+				regulator-name = "tps6594-2-buck4";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_2_buck5: buck5 {
+				regulator-name = "tps6594-2-buck5";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_2_ldo1: ldo1 {
+				regulator-name = "tps6594-2-ldo1";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+
+			tps6594_2_ldo2: ldo2 {
+				regulator-name = "tps6594-2-ldo2";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+
+			tps6594_2_ldo3: ldo3 {
+				regulator-name = "tps6594-2-ldo3";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+
+			tps6594_2_ldo4: ldo4 {
+				regulator-name = "tps6594-2-ldo4";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+		};
+	};
+
+	board_pmic_3: pmic@68 {
+		compatible = "ti,tps6594-q1";
+		reg = <0x68>;
+		interrupt-parent = <&smd_gpio>;
+		interrupts = <5 IRQ_TYPE_LEVEL_LOW>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		gpio-line-names =
+			"tps6594-3-gpio1", "tps6594-3-gpio2",
+			"tps6594-3-gpio3", "tps6594-3-gpio4",
+			"tps6594-3-gpio5", "tps6594-3-gpio6",
+			"tps6594-3-gpio7", "tps6594-3-gpio8",
+			"tps6594-3-gpio9", "tps6594-3-gpio10",
+			"tps6594-3-gpio11";
+
+		regulators {
+			tps6594_3_buck1: buck1 {
+				regulator-name = "tps6594-3-buck1";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_3_buck2: buck2 {
+				regulator-name = "tps6594-3-buck2";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_3_buck3: buck3 {
+				regulator-name = "tps6594-3-buck3";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_3_buck4: buck4 {
+				regulator-name = "tps6594-3-buck4";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_3_buck5: buck5 {
+				regulator-name = "tps6594-3-buck5";
+				regulator-min-microvolt = <900000>;
+				regulator-max-microvolt = <900000>;
+			};
+
+			tps6594_3_ldo1: ldo1 {
+				regulator-name = "tps6594-3-ldo1";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+
+			tps6594_3_ldo2: ldo2 {
+				regulator-name = "tps6594-3-ldo2";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+
+			tps6594_3_ldo3: ldo3 {
+				regulator-name = "tps6594-3-ldo3";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+
+			tps6594_3_ldo4: ldo4 {
+				regulator-name = "tps6594-3-ldo4";
 				regulator-min-microvolt = <1800000>;
 				regulator-max-microvolt = <1800000>;
 			};
