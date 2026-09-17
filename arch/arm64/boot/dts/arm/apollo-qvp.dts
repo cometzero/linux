@@ -263,6 +263,7 @@
 
 	dma350_0: dma-controller@31000000 {
 		compatible = "arm,dma-350";
+		cyclic_done_pause;
 		reg = <0x0 0x31000000 0x0 0x10000>;
 		interrupts = <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>,
 			     <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>,
@@ -277,6 +278,7 @@
 
 	dma350_1: dma-controller@31010000 {
 		compatible = "arm,dma-350";
+		cyclic_done_pause;
 		reg = <0x0 0x31010000 0x0 0x10000>;
 		interrupts = <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>,
 			     <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>,
