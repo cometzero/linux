@@ -36,16 +36,6 @@ properties:
     const: 1
     description: The cell is the trigger input number
 
-  cyclic_done_pause:
-    type: boolean
-    description: |
-      Pause at each command completion for interrupt-enabled, command-linked
-      cyclic transfers using CH_CTRL.DONEPAUSEEN. Resume after the client period
-      callback returns. This provides callback pacing for integrations requiring
-      software service before advancing the ring; it does not guarantee that
-      userspace has refilled the buffer. When absent, linked cyclic transfers
-      advance autonomously. Non-cyclic transfers are unaffected.
-
 required:
   - compatible
   - reg

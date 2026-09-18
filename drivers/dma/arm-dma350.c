@@ -142,6 +142,11 @@
 
 #define D350_STATE_POLL_US	1000
 
+static bool cyclic_done_pause;
+module_param(cyclic_done_pause, bool, 0644);
+MODULE_PARM_DESC(cyclic_done_pause,
+		"Pause linked cyclic transfers until the period callback returns");
+
 #define LINK_REGCLEAR		BIT(0)
 #define LINK_INTREN		BIT(2)
 #define LINK_CTRL		BIT(3)
@@ -221,7 +226,6 @@ struct d350_chan {
 	bool has_trig;
 	bool has_wrap;
 	bool has_cmdlink;
-	bool cyclic_done_pause;
 	bool coherent;
 	bool stopping;
 };
@@ -488,7 +492,7 @@ d350_prep_dma_cyclic(struct dma_chan *chan, dma_addr_t buf_addr,
 	if (dch->has_cmdlink) {
 		struct device *dev = chan->device->dev;
 
-		desc->done_pause = dch->cyclic_done_pause &&
+		desc->done_pause = READ_ONCE(cyclic_done_pause) &&
 				   (flags & DMA_PREP_INTERRUPT);
 		desc->hw_size = array_size(periods, sizeof(*desc->hw_command));
 		desc->hw_command = dma_alloc_coherent(dev, desc->hw_size,
@@ -1049,7 +1053,7 @@ static int d350_probe(struct platform_device *pdev)
 	void __iomem *base;
 	u32 reg;
 	int ret, nchan, nreq, dw, aw, r, p;
-	bool coherent, memset, cyclic_done_pause;
+	bool coherent, memset;
 
 	base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(base))
@@ -1083,10 +1087,6 @@ static int d350_probe(struct platform_device *pdev)
 
 	dmac->nchan = nchan;
 	dmac->nreq = nreq;
-	cyclic_done_pause = of_property_read_bool(dev->of_node,
-						"cyclic_done_pause");
-	if (cyclic_done_pause)
-		dev_info(dev, "Enabling DT cyclic DONEPAUSE pacing\n");
 
 	dev_dbg(dev, "DMA-350 r%dp%d with %d channels, %d requests\n", r, p, dmac->nchan, dmac->nreq);
 
@@ -1138,7 +1138,6 @@ static int d350_probe(struct platform_device *pdev)
 		reg = readl_relaxed(dch->base + CH_BUILDCFG1);
 		dch->has_wrap = FIELD_GET(CH_CFG_HAS_WRAP, reg);
 		dch->has_cmdlink = FIELD_GET(CH_CFG_HAS_CMDLINK, reg);
-		dch->cyclic_done_pause = cyclic_done_pause;
 		dch->has_trig = FIELD_GET(CH_CFG_HAS_TRIGIN, reg) &
 				FIELD_GET(CH_CFG_HAS_TRIGSEL, reg);
 		if (i < nreq && !dch->has_trig)
