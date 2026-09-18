@@ -71,7 +71,6 @@
 #define CH_CTRL			0x0c
 #define CH_CTRL_USEDESTRIGIN	BIT(26)
 #define CH_CTRL_USESRCTRIGIN	BIT(25)
-#define CH_CTRL_DONEPAUSEEN	BIT(24)
 #define CH_CTRL_DONETYPE	GENMASK(23, 21)
 #define CH_CTRL_REGRELOADTYPE	GENMASK(20, 18)
 #define CH_CTRL_XTYPE		GENMASK(11, 9)
@@ -142,11 +141,6 @@
 
 #define D350_STATE_POLL_US	1000
 
-static bool cyclic_done_pause;
-module_param(cyclic_done_pause, bool, 0644);
-MODULE_PARM_DESC(cyclic_done_pause,
-		"Pause linked cyclic transfers until the period callback returns");
-
 #define LINK_REGCLEAR		BIT(0)
 #define LINK_INTREN		BIT(2)
 #define LINK_CTRL		BIT(3)
@@ -195,19 +189,10 @@ enum ch_cfg_memattr {
 struct d350_desc {
 	struct virt_dma_desc vd;
 	u32 command[16];
-	__le32 (*hw_command)[16];
-	dma_addr_t hw_addr;
-	size_t hw_size;
-	dma_addr_t buf_addr;
-	u32 buf_len;
-	u32 position_reg;
 	u16 xsize;
 	u16 xsizehi;
 	u8 tsz;
 	bool cyclic;
-	bool done_pause;
-	bool done_pending;
-	struct dmaengine_desc_callback callback;
 	struct d350_desc *next;
 };
 
@@ -225,7 +210,6 @@ struct d350_chan {
 	u8 tsz;
 	bool has_trig;
 	bool has_wrap;
-	bool has_cmdlink;
 	bool coherent;
 	bool stopping;
 };
@@ -249,12 +233,7 @@ static inline struct d350_desc *to_d350_desc(struct virt_dma_desc *vd)
 
 static void d350_desc_free(struct virt_dma_desc *vd)
 {
-	struct d350_desc *desc = to_d350_desc(vd);
-
-	if (desc->hw_command)
-		dma_free_coherent(vd->tx.chan->device->dev, desc->hw_size,
-				  desc->hw_command, desc->hw_addr);
-	kfree(desc);
+	kfree(to_d350_desc(vd));
 }
 
 static struct dma_async_tx_descriptor *d350_prep_memcpy(struct dma_chan *chan,
@@ -489,36 +468,6 @@ d350_prep_dma_cyclic(struct dma_chan *chan, dma_addr_t buf_addr,
 			desc[i].next = &desc[i + 1];
 	}
 	desc->cyclic = true;
-	if (dch->has_cmdlink) {
-		struct device *dev = chan->device->dev;
-
-		desc->done_pause = READ_ONCE(cyclic_done_pause) &&
-				   (flags & DMA_PREP_INTERRUPT);
-		desc->hw_size = array_size(periods, sizeof(*desc->hw_command));
-		desc->hw_command = dma_alloc_coherent(dev, desc->hw_size,
-						     &desc->hw_addr, GFP_NOWAIT);
-		if (!desc->hw_command)
-			goto err_free;
-		desc->buf_addr = buf_addr;
-		desc->buf_len = buf_len;
-		desc->position_reg = direction == DMA_MEM_TO_DEV ?
-			CH_SRCADDR : CH_DESADDR;
-
-		for (i = 0; i < periods; i++) {
-			dma_addr_t next = desc->hw_addr +
-				((i + 1) % periods) * sizeof(*desc->hw_command);
-			unsigned int j;
-
-			/* Slave commands have one trigger word before LINKADDR. */
-			if (desc->done_pause)
-				desc[i].command[1] |= CH_CTRL_DONEPAUSEEN;
-			desc[i].command[0] |= LINK_LINKADDRHI;
-			desc[i].command[12] = lower_32_bits(next) | CH_LINKADDR_EN;
-			desc[i].command[13] = upper_32_bits(next);
-			for (j = 0; j < ARRAY_SIZE(desc[i].command); j++)
-				desc->hw_command[i][j] = cpu_to_le32(desc[i].command[j]);
-		}
-	}
 
 	return vchan_tx_prep(&dch->vc, &desc->vd, flags);
 
@@ -560,14 +509,6 @@ static int d350_resume(struct dma_chan *chan)
 
 	spin_lock_irqsave(&dch->vc.lock, flags);
 	if (dch->status == DMA_PAUSED && dch->desc) {
-		if (dch->desc->done_pause) {
-			/* DONE may precede its IRQ and the callback's ownership. */
-			status = readl(dch->base + CH_STATUS);
-			if (!dch->desc->done_pending && !(status & CH_STAT_DONE))
-				writel(CH_CMD_RESUME, dch->base + CH_CMD);
-			dch->status = DMA_IN_PROGRESS;
-			goto unlock;
-		}
 		writel_relaxed(CH_CMD_RESUME, dch->base + CH_CMD);
 		ret = readl_poll_timeout_atomic(dch->base + CH_STATUS,
 						status,
@@ -577,7 +518,6 @@ static int d350_resume(struct dma_chan *chan)
 		if (!ret)
 			dch->status = DMA_IN_PROGRESS;
 	}
-unlock:
 	spin_unlock_irqrestore(&dch->vc.lock, flags);
 
 	return ret;
@@ -592,38 +532,12 @@ static u32 d350_get_residue(struct d350_chan *dch)
 	if (!desc)
 		return dch->residue;
 
-	if (dch->desc->hw_command) {
-		struct d350_desc *head = dch->desc;
-		u32 position;
-
-		/*
-		 * Read the incrementing memory-side address, not an IRQ-owned
-		 * software period index. One read avoids crossing a command-load
-		 * boundary between LINKADDR and XSIZE samples. Unsigned subtraction
-		 * also handles a buffer spanning a 4 GiB boundary (buf_len <= U32_MAX).
-		 */
-		position = readl_relaxed(dch->base + head->position_reg) -
-			   lower_32_bits(head->buf_addr);
-		if (position <= head->buf_len)
-			return head->buf_len - position;
-		return dch->residue;
-	}
-
-	if (!desc->xsizehi) {
-		/*
-		 * The count only decreases, and vc.lock prevents a new command
-		 * being programmed. A count that fits in XSIZE keeps XSIZEHI zero.
-		 */
-		xsizehi = 0;
+	hi_new = readl_relaxed(dch->base + CH_XSIZEHI);
+	do {
+		xsizehi = hi_new;
 		xsize = readl_relaxed(dch->base + CH_XSIZE);
-	} else {
 		hi_new = readl_relaxed(dch->base + CH_XSIZEHI);
-		do {
-			xsizehi = hi_new;
-			xsize = readl_relaxed(dch->base + CH_XSIZE);
-			hi_new = readl_relaxed(dch->base + CH_XSIZEHI);
-		} while (xsizehi != hi_new && --retries);
-	}
+	} while (xsizehi != hi_new && --retries);
 
 	res = FIELD_GET(CH_XY_DES, xsize);
 	res |= FIELD_GET(CH_XY_DES, xsizehi) << 16;
@@ -659,21 +573,9 @@ static int d350_stop(struct d350_chan *dch)
 
 static void d350_start_next(struct d350_chan *dch);
 
-static void d350_restore_callback(struct d350_desc *desc)
-{
-	if (!desc || !desc->done_pause)
-		return;
-
-	/* Reusable descriptors must expose the client's callback fields. */
-	desc->vd.tx.callback = desc->callback.callback;
-	desc->vd.tx.callback_result = desc->callback.callback_result;
-	desc->vd.tx.callback_param = desc->callback.callback_param;
-}
-
 /* dch->vc.lock must be held after hardware is quiescent. */
 static void d350_finish_terminate(struct d350_chan *dch)
 {
-	d350_restore_callback(dch->desc);
 	dch->desc = NULL;
 	dch->cmd = NULL;
 	dch->status = DMA_COMPLETE;
@@ -823,27 +725,6 @@ static void d350_program_cmd(struct d350_chan *dch)
 	writel(CH_CMD_ENABLE, dch->base + CH_CMD);
 }
 
-static void d350_cyclic_callback(void *param,
-				 const struct dmaengine_result *result)
-{
-	struct d350_desc *desc = param;
-	struct d350_chan *dch = to_d350_chan(desc->vd.tx.chan);
-	dma_cookie_t cookie = desc->vd.tx.cookie;
-	unsigned long flags;
-
-	/* virt-dma retains the descriptor until this tasklet has returned. */
-	dmaengine_desc_callback_invoke(&desc->callback, result);
-
-	spin_lock_irqsave(&dch->vc.lock, flags);
-	if (dch->desc == desc && dch->cookie == cookie && desc->done_pending) {
-		desc->done_pending = false;
-		if (!dch->stopping && dch->status == DMA_IN_PROGRESS &&
-		    result && result->result == DMA_TRANS_NOERROR)
-			writel(CH_CMD_RESUME, dch->base + CH_CMD);
-	}
-	spin_unlock_irqrestore(&dch->vc.lock, flags);
-}
-
 static void d350_start_next(struct d350_chan *dch)
 {
 	struct virt_dma_desc *vd = vchan_next_desc(&dch->vc);
@@ -857,20 +738,7 @@ static void d350_start_next(struct d350_chan *dch)
 	dch->status = DMA_IN_PROGRESS;
 	dch->cookie = vd->tx.cookie;
 	dch->residue = d350_desc_chain_bytes(dch->desc);
-	if (dch->desc->done_pause &&
-	    vd->tx.callback_result != d350_cyclic_callback) {
-		dmaengine_desc_get_callback(&vd->tx, &dch->desc->callback);
-		vd->tx.callback = NULL;
-		vd->tx.callback_result = d350_cyclic_callback;
-		vd->tx.callback_param = dch->desc;
-	}
-	dch->desc->done_pending = false;
-	vd->tx_result.result = DMA_TRANS_NOERROR;
-	vd->tx_result.residue = 0;
 	writel_relaxed(CH_INTREN_DONE | CH_INTREN_ERR, dch->base + CH_INTREN);
-	/* Publish coherent descriptor contents before enabling command fetch. */
-	if (dch->desc->hw_command)
-		dma_wmb();
 	d350_program_cmd(dch);
 }
 
@@ -919,10 +787,6 @@ static irqreturn_t d350_irq(int irq, void *data)
 		return IRQ_HANDLED;
 	}
 	vd = &desc->vd;
-	if (dch->status == DMA_ERROR) {
-		writel_relaxed(ch_status, dch->base + CH_STATUS);
-		goto unlock;
-	}
 
 	if (ch_status & CH_STAT_INTR_ERR) {
 		u32 errinfo = readl_relaxed(dch->base + CH_ERRINFO);
@@ -936,51 +800,12 @@ static irqreturn_t d350_irq(int irq, void *data)
 
 		vd->tx_result.residue = d350_get_residue(dch);
 		writel_relaxed(ch_status, dch->base + CH_STATUS);
-		d350_restore_callback(desc);
 		dch->desc = NULL;
 		dch->cmd = NULL;
 		dch->status = DMA_ERROR;
 		dch->residue = vd->tx_result.residue;
 		vchan_cookie_complete(vd);
 		d350_start_next(dch);
-	} else if (desc->hw_command) {
-		if (desc->done_pause) {
-			u32 status;
-			int ret;
-
-			ret = readl_poll_timeout_atomic(dch->base + CH_STATUS,
-				status, (status & (CH_STAT_PAUSED |
-						  CH_STAT_RESUMEWAIT)) ==
-				(CH_STAT_PAUSED | CH_STAT_RESUMEWAIT),
-				1, D350_STATE_POLL_US);
-			if (ret) {
-				dev_err_ratelimited(dch->vc.chan.device->dev,
-					"channel %d: DONE pause timed out (%#x)\n",
-					dch->vc.chan.chan_id, status);
-				dch->status = DMA_ERROR;
-				vd->tx_result.result = DMA_TRANS_ABORTED;
-				vd->tx_result.residue = d350_get_residue(dch);
-				dch->residue = vd->tx_result.residue;
-				/* Retain the ring until terminate/synchronize. */
-				d350_stop(dch);
-				writel_relaxed(0, dch->base + CH_INTREN);
-				status = readl_relaxed(dch->base + CH_STATUS);
-				writel_relaxed(status, dch->base + CH_STATUS);
-				vchan_cyclic_callback(vd);
-				goto unlock;
-			}
-			desc->done_pending = true;
-			writel_relaxed(ch_status, dch->base + CH_STATUS);
-			vchan_cyclic_callback(vd);
-			goto unlock;
-		}
-		/*
-		 * Hardware already started the next period. DONE is sticky, not
-		 * a completion counter: notify progress once and let clients use
-		 * the live residue. Full unserviced laps cannot be reconstructed.
-		 */
-		writel_relaxed(ch_status, dch->base + CH_STATUS);
-		vchan_cyclic_callback(vd);
 	} else {
 		writel_relaxed(ch_status, dch->base + CH_STATUS);
 		dch->residue -= d350_desc_bytes(dch->cmd);
@@ -1002,7 +827,6 @@ static irqreturn_t d350_irq(int irq, void *data)
 			d350_start_next(dch);
 		}
 	}
-unlock:
 	spin_unlock_irqrestore(&dch->vc.lock, flags);
 
 	return IRQ_HANDLED;
@@ -1137,7 +961,6 @@ static int d350_probe(struct platform_device *pdev)
 
 		reg = readl_relaxed(dch->base + CH_BUILDCFG1);
 		dch->has_wrap = FIELD_GET(CH_CFG_HAS_WRAP, reg);
-		dch->has_cmdlink = FIELD_GET(CH_CFG_HAS_CMDLINK, reg);
 		dch->has_trig = FIELD_GET(CH_CFG_HAS_TRIGIN, reg) &
 				FIELD_GET(CH_CFG_HAS_TRIGSEL, reg);
 		if (i < nreq && !dch->has_trig)
