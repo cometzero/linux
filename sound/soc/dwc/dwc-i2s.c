@@ -34,7 +34,7 @@
 static unsigned int dma_wait_time_ms;
 module_param(dma_wait_time_ms, uint, 0644);
 MODULE_PARM_DESC(dma_wait_time_ms,
-	"DMA PCM I/O wait override in milliseconds (0=default, max=5000)");
+	"DMA PCM I/O and drain wait override in milliseconds (0=default, max=5000)");
 
 static bool pio_fifo_empty_irq;
 module_param(pio_fifo_empty_irq, bool, 0644);
