@@ -12,11 +12,9 @@
  */
 
 #include <linux/clk.h>
-#include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/init.h>
 #include <linux/io.h>
-#include <linux/iopoll.h>
 #include <linux/interrupt.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
@@ -30,16 +28,6 @@
 #include <sound/soc.h>
 #include <sound/dmaengine_pcm.h>
 #include "local.h"
-
-static unsigned int dma_wait_time_ms;
-module_param(dma_wait_time_ms, uint, 0644);
-MODULE_PARM_DESC(dma_wait_time_ms,
-	"DMA PCM I/O and drain wait override in milliseconds (0=default, max=5000)");
-
-static bool pio_fifo_empty_irq;
-module_param(pio_fifo_empty_irq, bool, 0644);
-MODULE_PARM_DESC(pio_fifo_empty_irq,
-	"Use the lowest PIO TX threshold and poll it before draining (default false)");
 
 static inline void i2s_write_reg(void __iomem *io_base, int reg, u32 val)
 {
@@ -120,18 +108,15 @@ static irqreturn_t i2s_irq_handler(int irq, void *dev_id)
 	struct dw_i2s_dev *dev = dev_id;
 	bool irq_valid = false;
 	u32 isr[4];
-	/* The PIO PCM implementation supports one stereo channel pair. */
-	unsigned int channels = dev->use_pio ? 1 : ARRAY_SIZE(isr);
 	int i;
 
-	for (i = 0; i < channels; i++)
+	for (i = 0; i < 4; i++)
 		isr[i] = i2s_read_reg(dev->i2s_base, ISR(i));
 
-	for (i = 0; i < channels; i++) {
-		if (isr[i] & ISR_TXFO)
-			i2s_read_reg(dev->i2s_base, TOR(i));
-		if (isr[i] & ISR_RXFO)
-			i2s_read_reg(dev->i2s_base, ROR(i));
+	i2s_clear_irqs(dev, SNDRV_PCM_STREAM_PLAYBACK);
+	i2s_clear_irqs(dev, SNDRV_PCM_STREAM_CAPTURE);
+
+	for (i = 0; i < 4; i++) {
 		/*
 		 * Check if TX fifo is empty. If empty fill FIFO with samples
 		 * NOTE: Only two channels supported
@@ -251,11 +236,10 @@ static int dw_i2s_startup(struct snd_pcm_substream *substream,
 {
 	struct dw_i2s_dev *dev = snd_soc_dai_get_drvdata(cpu_dai);
 
-	if (!dev->use_pio || dev->is_jh7110) {
+	if (dev->is_jh7110) {
 		struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
 		struct snd_soc_dai_link *dai_link = rtd->dai_link;
 
-		substream->wait_time = min(READ_ONCE(dma_wait_time_ms), 5000U);
 		dai_link->trigger_stop = SND_SOC_TRIGGER_ORDER_LDC;
 	}
 
@@ -275,8 +259,7 @@ static void dw_i2s_config(struct dw_i2s_dev *dev, int stream)
 			i2s_write_reg(dev->i2s_base, TCR(ch_reg),
 				      dev->xfer_resolution);
 			i2s_write_reg(dev->i2s_base, TFCR(ch_reg),
-				      dev->use_pio && READ_ONCE(pio_fifo_empty_irq) ?
-				      0 : dev->fifo_th - 1);
+				      dev->fifo_th - 1);
 			i2s_write_reg(dev->i2s_base, TER(ch_reg), TER_TXCHEN |
 				      dev->tdm_mask << TER_TXSLOT_SHIFT);
 		} else {
@@ -388,64 +371,14 @@ static int dw_i2s_trigger(struct snd_pcm_substream *substream,
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
+	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 		dev->active++;
 		i2s_start(dev, substream);
 		break;
 
-	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-		i2s_start(dev, substream);
-		break;
-
-	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
-		/*
-		 * A paused stream still owns its FIFO contents. Keep it active
-		 * so i2s_stop(), including a peer stream's STOP, cannot clear
-		 * IER and flush the FIFOs before PAUSE_RELEASE.
-		 */
-		i2s_stop(dev, substream);
-		break;
-
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
-		if (cmd == SNDRV_PCM_TRIGGER_STOP &&
-		    !dev->is_jh7110 &&
-		    substream->stream == SNDRV_PCM_STREAM_PLAYBACK &&
-		    substream->runtime->state == SNDRV_PCM_STATE_DRAINING) {
-			unsigned int remaining = DIV_ROUND_UP(
-				(dev->fifo_th * 2 + 1) * USEC_PER_SEC,
-				substream->runtime->rate);
-
-			/*
-			 * PCM progress accounts for writes into the FIFO, not
-			 * samples on the wire. Stop requests before allowing one
-			 * full FIFO and the serializer to drain. Disabling ITER
-			 * or IER earlier can discard the tail of the stream.
-			 */
-			if (dev->use_pio)
-				i2s_disable_irqs(dev, substream->stream,
-						 dev->config.chan_nr);
-			else
-				i2s_disable_dma(dev, substream->stream);
-			if (dev->use_pio &&
-			    !i2s_read_reg(dev->i2s_base, TFCR(0))) {
-				u32 status;
-
-				/* TFCR was set while the channel was disabled. */
-				ret = readl_poll_timeout_atomic(dev->i2s_base + ISR(0),
-					status, status & ISR_TXFE, 10, 10000);
-				if (ret)
-					dev_err(dev->dev, "PIO TX drain threshold timeout\n");
-				/* Allow the lowest threshold plus the serializer. */
-				remaining = DIV_ROUND_UP(2 * USEC_PER_SEC,
-							substream->runtime->rate);
-			}
-			while (remaining) {
-				unsigned int chunk = min(remaining, 1000U);
-
-				udelay(chunk);
-				remaining -= chunk;
-			}
-		}
+	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 		dev->active--;
 		i2s_stop(dev, substream);
 		break;

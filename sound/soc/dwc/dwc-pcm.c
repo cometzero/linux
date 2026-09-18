@@ -12,7 +12,6 @@
  */
 
 #include <linux/io.h>
-#include <linux/moduleparam.h>
 #include <linux/rcupdate.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
@@ -21,12 +20,6 @@
 #define BUFFER_BYTES_MAX	(3 * 2 * 8 * PERIOD_BYTES_MIN)
 #define PERIOD_BYTES_MIN	4096
 #define PERIODS_MIN		2
-
-/* Optional, bounded diagnostic allowance for slow MMIO implementations. */
-static unsigned int pio_wait_time_ms;
-module_param(pio_wait_time_ms, uint, 0644);
-MODULE_PARM_DESC(pio_wait_time_ms,
-	"PIO PCM progress timeout in ms (0: ALSA default, capped at 5000)");
 
 #define dw_pcm_tx_fn(sample_bits) \
 static unsigned int dw_pcm_tx_##sample_bits(struct dw_i2s_dev *dev, \
@@ -102,20 +95,15 @@ static const struct snd_pcm_hardware dw_pcm_hardware = {
 static void dw_pcm_transfer(struct dw_i2s_dev *dev, bool push)
 {
 	struct snd_pcm_substream *substream;
-	unsigned long flags;
-	bool period_elapsed;
+	bool active, period_elapsed;
 
 	rcu_read_lock();
 	if (push)
 		substream = rcu_dereference(dev->tx_substream);
 	else
 		substream = rcu_dereference(dev->rx_substream);
-	if (!substream)
-		goto out;
-
-	/* Serialize with START's state publication and STOP's FIFO teardown. */
-	snd_pcm_stream_lock_irqsave(substream, flags);
-	if (snd_pcm_running(substream)) {
+	active = substream && snd_pcm_running(substream);
+	if (active) {
 		unsigned int ptr;
 		unsigned int new_ptr;
 
@@ -132,10 +120,8 @@ static void dw_pcm_transfer(struct dw_i2s_dev *dev, bool push)
 		}
 
 		if (period_elapsed)
-			snd_pcm_period_elapsed_under_stream_lock(substream);
+			snd_pcm_period_elapsed(substream);
 	}
-	snd_pcm_stream_unlock_irqrestore(substream, flags);
-out:
 	rcu_read_unlock();
 }
 
@@ -159,7 +145,6 @@ static int dw_pcm_open(struct snd_soc_component *component,
 	snd_soc_set_runtime_hwparams(substream, &dw_pcm_hardware);
 	snd_pcm_hw_constraint_integer(runtime, SNDRV_PCM_HW_PARAM_PERIODS);
 	runtime->private_data = dev;
-	substream->wait_time = min(READ_ONCE(pio_wait_time_ms), 5000U);
 
 	return 0;
 }
