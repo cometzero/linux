@@ -2051,7 +2051,7 @@ static int __init ffa_init(void)
 			   virt_to_phys(drv_info->rx_buffer),
 			   rxtx_bufsz / FFA_PAGE_SIZE);
 	if (ret) {
-		pr_err("failed to register FFA RxTx buffers\n");
+		pr_err("failed to register FFA RxTx buffers: %d\n", ret);
 		goto free_pages;
 	}
 
