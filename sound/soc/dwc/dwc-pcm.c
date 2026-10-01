@@ -95,15 +95,23 @@ static const struct snd_pcm_hardware dw_pcm_hardware = {
 static void dw_pcm_transfer(struct dw_i2s_dev *dev, bool push)
 {
 	struct snd_pcm_substream *substream;
-	bool active, period_elapsed;
+	unsigned long flags;
+	bool period_elapsed;
 
 	rcu_read_lock();
 	if (push)
 		substream = rcu_dereference(dev->tx_substream);
 	else
 		substream = rcu_dereference(dev->rx_substream);
-	active = substream && snd_pcm_running(substream);
-	if (active) {
+	if (!substream)
+		goto out;
+
+	/*
+	 * Serialize FIFO access with trigger and the PCM state transition.
+	 * On RT, a threaded IRQ must wait for a preempted start to finish.
+	 */
+	snd_pcm_stream_lock_irqsave(substream, flags);
+	if (snd_pcm_running(substream)) {
 		unsigned int ptr;
 		unsigned int new_ptr;
 
@@ -120,8 +128,10 @@ static void dw_pcm_transfer(struct dw_i2s_dev *dev, bool push)
 		}
 
 		if (period_elapsed)
-			snd_pcm_period_elapsed(substream);
+			snd_pcm_period_elapsed_under_stream_lock(substream);
 	}
+	snd_pcm_stream_unlock_irqrestore(substream, flags);
+out:
 	rcu_read_unlock();
 }
 
