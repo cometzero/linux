@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: (GPL-2.0 OR BSD-3-Clause)
 /*
- * Copyright (c) 2025, Arm Limited. All rights reserved.
+ * Copyright (c) 2025-2026, Arm Limited. All rights reserved.
  */
 
 #include <dt-bindings/interrupt-controller/arm-gic.h>
@@ -20,34 +20,6 @@
 	cpus {
 		#address-cells = <2>;
 		#size-cells = <0>;
-
-		/*
-		 * The latency and residency numbers below are for illustrative
-		 * purposes only and may vary on actual silicon. These values are
-		 * considered just to demonstrate that the cpuidle governor logic
-		 * works.
-		 */
-		idle-states {
-			entry-method = "psci";
-
-			cpu_sleep: cpu-sleep {
-				compatible = "arm,idle-state";
-				arm,psci-suspend-param = <0x10000>;
-				entry-latency-us = <800>;
-				exit-latency-us = <3200>;
-				local-timer-stop;
-				min-residency-us = <4200>;
-			};
-
-			cluster_sleep: cluster-sleep {
-				compatible = "arm,idle-state";
-				arm,psci-suspend-param = <0x1010000>;
-				entry-latency-us = <1000>;
-				exit-latency-us = <3200>;
-				local-timer-stop;
-				min-residency-us = <4500>;
-			};
-		};
 
 		cpu-map {
 			cluster0 {
@@ -86,7 +58,6 @@
 			enable-method = "psci";
 
 			clocks = <&scmi_dvfs 0>;
-			cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 			next-level-cache = <&cl0_l2_0>;
 
 			i-cache-line-size = <64>;
@@ -115,7 +86,6 @@
 			enable-method = "psci";
 
 			clocks = <&scmi_dvfs 0>;
-			cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 			next-level-cache = <&cl0_l2_1>;
 
 			i-cache-line-size = <64>;
@@ -144,7 +114,6 @@
 			enable-method = "psci";
 
 			clocks = <&scmi_dvfs 0>;
-			cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 			next-level-cache = <&cl0_l2_2>;
 
 			i-cache-line-size = <64>;
@@ -173,7 +142,6 @@
 			enable-method = "psci";
 
 			clocks = <&scmi_dvfs 0>;
-			cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 			next-level-cache = <&cl0_l2_3>;
 
 			i-cache-line-size = <64>;
@@ -202,7 +170,6 @@
 			enable-method = "psci";
 
 			clocks = <&scmi_dvfs 0>;
-			cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 			next-level-cache = <&cl1_l2_0>;
 
 			i-cache-line-size = <64>;
@@ -231,7 +198,6 @@
 			enable-method = "psci";
 
 			clocks = <&scmi_dvfs 0>;
-			cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 			next-level-cache = <&cl1_l2_1>;
 
 			i-cache-line-size = <64>;
@@ -260,7 +226,6 @@
 			enable-method = "psci";
 
 			clocks = <&scmi_dvfs 0>;
-			cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 			next-level-cache = <&cl1_l2_2>;
 
 			i-cache-line-size = <64>;
@@ -289,7 +254,6 @@
 			enable-method = "psci";
 
 			clocks = <&scmi_dvfs 0>;
-			cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 			next-level-cache = <&cl1_l2_3>;
 
 			i-cache-line-size = <64>;
@@ -318,7 +282,6 @@
 			enable-method = "psci";
 
 			clocks = <&scmi_dvfs 0>;
-			cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 			next-level-cache = <&cl2_l2_0>;
 
 			i-cache-line-size = <64>;
@@ -347,7 +310,6 @@
 			enable-method = "psci";
 
 			clocks = <&scmi_dvfs 0>;
-			cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 			next-level-cache = <&cl2_l2_1>;
 
 			i-cache-line-size = <64>;
@@ -376,7 +338,6 @@
 			enable-method = "psci";
 
 			clocks = <&scmi_dvfs 0>;
-			cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 			next-level-cache = <&cl2_l2_2>;
 
 			i-cache-line-size = <64>;
@@ -405,7 +366,6 @@
 			enable-method = "psci";
 
 			clocks = <&scmi_dvfs 0>;
-			cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 			next-level-cache = <&cl2_l2_3>;
 
 			i-cache-line-size = <64>;
@@ -434,7 +394,6 @@
 			enable-method = "psci";
 
 			clocks = <&scmi_dvfs 0>;
-			cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 			next-level-cache = <&cl3_l2_0>;
 
 			i-cache-line-size = <64>;
@@ -463,7 +422,6 @@
 			enable-method = "psci";
 
 			clocks = <&scmi_dvfs 0>;
-			cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 			next-level-cache = <&cl3_l2_1>;
 
 			i-cache-line-size = <64>;
@@ -492,7 +450,6 @@
 			enable-method = "psci";
 
 			clocks = <&scmi_dvfs 0>;
-			cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 			next-level-cache = <&cl3_l2_2>;
 
 			i-cache-line-size = <64>;
@@ -521,7 +478,6 @@
 			enable-method = "psci";
 
 			clocks = <&scmi_dvfs 0>;
-			cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 			next-level-cache = <&cl3_l2_3>;
 
 			i-cache-line-size = <64>;
@@ -756,6 +712,7 @@
 			interrupts = <GIC_SPI 52 IRQ_TYPE_LEVEL_HIGH>;
 			clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
 			clock-names = "uartclk", "apb_pclk";
+			status = "disabled";
 		};
 
 		watchdog@1a420000 {
@@ -783,9 +740,7 @@
 			#gpio-cells = <2>;
 			interrupt-controller;
 			#interrupt-cells = <2>;
-			gpio-line-names =
-				"smd-gpio0", "smd-gpio1", "smd-gpio2", "smd-gpio3",
-				"smd-gpio4", "smd-gpio5", "smd-gpio6", "smd-gpio7";
+			status = "disabled";
 		};
 
 		mbox_db_tx: mailbox@40020000 {
@@ -866,3 +821,244 @@
 			     <GIC_PPI 12 IRQ_TYPE_LEVEL_LOW>;
 	};
 };
+
+&soc {
+	smmu: iommu@1c0000000 {
+		compatible = "arm,smmu-v3";
+		reg = <0x1 0xc0000000 0x0 0x8000000>;
+		dma-coherent;
+		#iommu-cells = <1>;
+		interrupts = <GIC_SPI 65 IRQ_TYPE_EDGE_RISING>;
+		interrupt-names = "combined";
+		msi-parent = <&its 0x10000>;
+		status = "disabled";
+	};
+
+	dma350_0: dma-controller@31000000 {
+		compatible = "arm,dma-350";
+		reg = <0x0 0x31000000 0x0 0x10000>;
+		interrupts = <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>;
+		#dma-cells = <1>;
+		status = "disabled";
+	};
+
+	dma350_1: dma-controller@31010000 {
+		compatible = "arm,dma-350";
+		reg = <0x0 0x31010000 0x0 0x10000>;
+		interrupts = <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 358 IRQ_TYPE_LEVEL_HIGH>;
+		#dma-cells = <1>;
+		status = "disabled";
+	};
+
+	dw_i2c0: i2c@30100000 {
+		compatible = "snps,designware-i2c";
+		reg = <0x0 0x30100000 0x0 0x10000>;
+		interrupts = <GIC_SPI 320 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ref", "pclk";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		status = "disabled";
+	};
+
+	dw_i2c1: i2c@30110000 {
+		compatible = "snps,designware-i2c";
+		reg = <0x0 0x30110000 0x0 0x10000>;
+		interrupts = <GIC_SPI 321 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ref", "pclk";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		status = "disabled";
+	};
+
+	dw_i2c2: i2c@30120000 {
+		compatible = "snps,designware-i2c";
+		reg = <0x0 0x30120000 0x0 0x10000>;
+		interrupts = <GIC_SPI 322 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ref", "pclk";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		status = "disabled";
+	};
+
+	dw_i2c3: i2c@30130000 {
+		compatible = "snps,designware-i2c";
+		reg = <0x0 0x30130000 0x0 0x10000>;
+		interrupts = <GIC_SPI 323 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ref", "pclk";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		status = "disabled";
+	};
+
+	dw_i2c4: i2c@30140000 {
+		compatible = "snps,designware-i2c";
+		reg = <0x0 0x30140000 0x0 0x10000>;
+		interrupts = <GIC_SPI 324 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ref", "pclk";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		status = "disabled";
+	};
+
+	dw_i2c5: i2c@30150000 {
+		compatible = "snps,designware-i2c";
+		reg = <0x0 0x30150000 0x0 0x10000>;
+		interrupts = <GIC_SPI 325 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ref", "pclk";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		status = "disabled";
+	};
+
+	dw_spi0: spi@30160000 {
+		compatible = "snps,dw-apb-ssi";
+		reg = <0x0 0x30160000 0x0 0x10000>;
+		interrupts = <GIC_SPI 326 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ssi_clk", "pclk";
+		reg-io-width = <4>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		dmas = <&dma350_0 0>, <&dma350_0 1>;
+		dma-names = "tx", "rx";
+
+		status = "disabled";
+	};
+
+	dw_spi1: spi@30170000 {
+		compatible = "snps,dw-apb-ssi";
+		reg = <0x0 0x30170000 0x0 0x10000>;
+		interrupts = <GIC_SPI 327 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ssi_clk", "pclk";
+		reg-io-width = <4>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		dmas = <&dma350_0 2>, <&dma350_0 3>;
+		dma-names = "tx", "rx";
+
+		status = "disabled";
+	};
+
+	dw_spi2: spi@30180000 {
+		compatible = "snps,dw-apb-ssi";
+		reg = <0x0 0x30180000 0x0 0x10000>;
+		interrupts = <GIC_SPI 328 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ssi_clk", "pclk";
+		reg-io-width = <4>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		status = "disabled";
+	};
+
+	dw_spi3: spi@30190000 {
+		compatible = "snps,dw-apb-ssi";
+		reg = <0x0 0x30190000 0x0 0x10000>;
+		interrupts = <GIC_SPI 329 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "ssi_clk", "pclk";
+		reg-io-width = <4>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		status = "disabled";
+	};
+
+	dw_uart0: serial@301a0000 {
+		compatible = "snps,dw-apb-uart";
+		reg = <0x0 0x301a0000 0x0 0x10000>;
+		interrupts = <GIC_SPI 330 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "baudclk", "apb_pclk";
+		reg-shift = <2>;
+		reg-io-width = <4>;
+		dmas = <&dma350_0 4>, <&dma350_0 5>;
+		dma-names = "tx", "rx";
+		status = "disabled";
+	};
+
+	dw_uart1: serial@301b0000 {
+		compatible = "snps,dw-apb-uart";
+		reg = <0x0 0x301b0000 0x0 0x10000>;
+		interrupts = <GIC_SPI 331 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "baudclk", "apb_pclk";
+		reg-shift = <2>;
+		reg-io-width = <4>;
+		dmas = <&dma350_0 6>, <&dma350_0 7>;
+		dma-names = "tx", "rx";
+		status = "disabled";
+	};
+
+	dw_uart2: serial@301c0000 {
+		compatible = "snps,dw-apb-uart";
+		reg = <0x0 0x301c0000 0x0 0x10000>;
+		interrupts = <GIC_SPI 332 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "baudclk", "apb_pclk";
+		reg-shift = <2>;
+		reg-io-width = <4>;
+		status = "disabled";
+	};
+
+	dw_uart3: serial@301d0000 {
+		compatible = "snps,dw-apb-uart";
+		reg = <0x0 0x301d0000 0x0 0x10000>;
+		interrupts = <GIC_SPI 333 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&soc_clk24mhz>, <&soc_clk24mhz>;
+		clock-names = "baudclk", "apb_pclk";
+		reg-shift = <2>;
+		reg-io-width = <4>;
+		status = "disabled";
+	};
+
+	dw_i2s0: i2s@30200000 {
+		compatible = "snps,designware-i2s";
+		reg = <0x0 0x30200000 0x0 0x10000>;
+		interrupts = <GIC_SPI 356 IRQ_TYPE_LEVEL_HIGH>;
+		#sound-dai-cells = <0>;
+		dmas = <&dma350_1 0>, <&dma350_1 1>;
+		dma-names = "tx", "rx";
+		status = "disabled";
+	};
+
+	dw_i2s1: i2s@30210000 {
+		compatible = "snps,designware-i2s";
+		reg = <0x0 0x30210000 0x0 0x10000>;
+		interrupts = <GIC_SPI 357 IRQ_TYPE_LEVEL_HIGH>;
+		#sound-dai-cells = <0>;
+		dmas = <&dma350_1 2>, <&dma350_1 3>;
+		dma-names = "tx", "rx";
+		status = "disabled";
+	};
+};
+
+#include "apollo-pinctrl.dtsi"
