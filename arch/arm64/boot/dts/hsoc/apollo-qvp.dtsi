@@ -3,7 +3,10 @@
  * Copyright (c) 2025-2026, Arm Limited. All rights reserved.
  */
 
-/* QBox virtual transports and the existing SPI/audio test profile. */
+/*
+ * QBox virtual transports and the existing SPI/audio test profile.
+ * Use architectural WFI idle; PSCI powerdown wakeup is not modeled.
+ */
 #include "apollo.dtsi"
 
 / {
@@ -105,36 +108,6 @@
 
 			i2s1_rx_codec: codec {
 				sound-dai = <&i2s1_capture_codec>;
-			};
-		};
-	};
-
-	cpus {
-		/*
-		 * The latency and residency numbers below are for illustrative
-		 * purposes only and may vary on actual silicon. These values are
-		 * considered just to demonstrate that the cpuidle governor logic
-		 * works.
-		 */
-		idle-states {
-			entry-method = "psci";
-
-			cpu_sleep: cpu-sleep {
-				compatible = "arm,idle-state";
-				arm,psci-suspend-param = <0x10000>;
-				entry-latency-us = <800>;
-				exit-latency-us = <3200>;
-				local-timer-stop;
-				min-residency-us = <4200>;
-			};
-
-			cluster_sleep: cluster-sleep {
-				compatible = "arm,idle-state";
-				arm,psci-suspend-param = <0x1010000>;
-				entry-latency-us = <1000>;
-				exit-latency-us = <3200>;
-				local-timer-stop;
-				min-residency-us = <4500>;
 			};
 		};
 	};
@@ -296,68 +269,4 @@
 &dw_i2s1 {
 	clocks = <&i2s_clk>;
 	clock-names = "i2sclk";
-};
-
-&cpu0 {
-	cpu-idle-states = <&cpu_sleep &cluster_sleep>;
-};
-
-&cpu1 {
-	cpu-idle-states = <&cpu_sleep &cluster_sleep>;
-};
-
-&cpu2 {
-	cpu-idle-states = <&cpu_sleep &cluster_sleep>;
-};
-
-&cpu3 {
-	cpu-idle-states = <&cpu_sleep &cluster_sleep>;
-};
-
-&cpu4 {
-	cpu-idle-states = <&cpu_sleep &cluster_sleep>;
-};
-
-&cpu5 {
-	cpu-idle-states = <&cpu_sleep &cluster_sleep>;
-};
-
-&cpu6 {
-	cpu-idle-states = <&cpu_sleep &cluster_sleep>;
-};
-
-&cpu7 {
-	cpu-idle-states = <&cpu_sleep &cluster_sleep>;
-};
-
-&cpu8 {
-	cpu-idle-states = <&cpu_sleep &cluster_sleep>;
-};
-
-&cpu9 {
-	cpu-idle-states = <&cpu_sleep &cluster_sleep>;
-};
-
-&cpu10 {
-	cpu-idle-states = <&cpu_sleep &cluster_sleep>;
-};
-
-&cpu11 {
-	cpu-idle-states = <&cpu_sleep &cluster_sleep>;
-};
-
-&cpu12 {
-	cpu-idle-states = <&cpu_sleep &cluster_sleep>;
-};
-
-&cpu13 {
-	cpu-idle-states = <&cpu_sleep &cluster_sleep>;
-};
-
-&cpu14 {
-	cpu-idle-states = <&cpu_sleep &cluster_sleep>;
-};
-
-&cpu15 {
-	cpu-idle-states = <&cpu_sleep &cluster_sleep>;
 };
