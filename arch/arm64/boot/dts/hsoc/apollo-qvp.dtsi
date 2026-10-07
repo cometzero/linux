@@ -5,7 +5,7 @@
 
 /*
  * QBox virtual transports and the existing SPI/audio test profile.
- * Use architectural WFI idle; PSCI powerdown wakeup is not modeled.
+ * Default to architectural WFI; PSCI CPU/cluster idle is opt-in.
  */
 #include "apollo.dtsi"
 
