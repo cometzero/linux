@@ -35,6 +35,7 @@
 	};
 
 	chosen {
+		bootargs = "console=ttyAMA0,115200 earlycon=pl011,0x1a400000 mem=4064M nr_cpus=4 rdinit=/init";
 		stdout-path = &soc_serial0;
 	};
 
