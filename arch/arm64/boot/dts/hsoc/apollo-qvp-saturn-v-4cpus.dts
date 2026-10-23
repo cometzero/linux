@@ -1,0 +1,35 @@
+// SPDX-License-Identifier: (GPL-2.0 OR BSD-3-Clause)
+/*
+ * Apollo QVP with one populated four-core AP cluster.
+ * Keep the full SoC description available for the sixteen-core variant.
+ */
+
+#include "apollo-qvp-saturn-v.dts"
+
+/delete-node/ &cpu4;
+/delete-node/ &cpu5;
+/delete-node/ &cpu6;
+/delete-node/ &cpu7;
+/delete-node/ &cpu8;
+/delete-node/ &cpu9;
+/delete-node/ &cpu10;
+/delete-node/ &cpu11;
+/delete-node/ &cpu12;
+/delete-node/ &cpu13;
+/delete-node/ &cpu14;
+/delete-node/ &cpu15;
+/delete-node/ &cl1_l3;
+/delete-node/ &cl2_l3;
+/delete-node/ &cl3_l3;
+
+&{/cpus/cpu-map} {
+	/delete-node/ cluster1;
+	/delete-node/ cluster2;
+	/delete-node/ cluster3;
+};
+
+/ {
+	/delete-node/ dsu-pmu-1;
+	/delete-node/ dsu-pmu-2;
+	/delete-node/ dsu-pmu-3;
+};

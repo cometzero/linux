@@ -1,2 +1,3 @@
 # SPDX-License-Identifier: GPL-2.0
 dtb-$(CONFIG_ARCH_VEXPRESS) += apollo-qvp-saturn-v.dtb
+dtb-$(CONFIG_ARCH_VEXPRESS) += apollo-qvp-saturn-v-4cpus.dtb
