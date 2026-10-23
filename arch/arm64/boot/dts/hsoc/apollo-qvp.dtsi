@@ -10,6 +10,13 @@
 #include "apollo.dtsi"
 
 / {
+	reserved-memory {
+		ras_buffer: cper@ffa00000 {
+			reg = <0x0 0xffa00000 0x0 0x00100000>;
+			no-map;
+		};
+	};
+
 	i2s_clk: clock-1536000 {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
@@ -114,6 +121,14 @@
 };
 
 &soc {
+	/* TF-A publishes CPER records here and notifies Linux with INTID 89. */
+	ras-ffh@ffa00000 {
+		compatible = "arm,ras-ffh";
+		reg = <0x0 0xffa00000 0x0 0x00100000>;
+		memory-region = <&ras_buffer>;
+		interrupts = <GIC_SPI 57 IRQ_TYPE_EDGE_RISING>;
+	};
+
 	pcie_epc: pcie-epc@30300000 {
 		compatible = "qbox,pcie-epc";
 		reg = <0x0 0x30300000 0x0 0x1000>,
